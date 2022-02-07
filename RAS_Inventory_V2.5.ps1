@@ -3,10 +3,10 @@
 
 <#
 .SYNOPSIS
-	Creates a complete inventory of a V18.1 Parallels Remote Application Server.
+	Creates a complete inventory of a V18.1 or later Parallels Remote Application Server.
 .DESCRIPTION
-	Creates a complete inventory of a V18.1 Parallels Remote Application Server (RAS) using 
-	Microsoft PowerShell, Word, plain text, or HTML.
+	Creates a complete inventory of a V18.1 or later Parallels Remote Application Server 
+	(RAS) using Microsoft PowerShell, Word, plain text, or HTML.
 	
 	The script requires at least PowerShell version 3 but runs best in version 5.
 
@@ -18,7 +18,7 @@
 	You do NOT have to run this script on a server running RAS. This script was developed 
 	and run from a Windows 10 VM.
 
-	Word and PDF document includes a Cover Page, Table of Contents and Footer.
+	Word and PDF document includes a Cover Page, Table of Contents, and Footer.
 	Includes support for the following language versions of Microsoft Word:
 		Catalan
 		Chinese
@@ -106,7 +106,7 @@
 
 	Script Name and Script Release date are script-specific variables.
 	Start Date Time in Local Format is a script variable.
-	Elapsed time is a calulated value.
+	Elapsed time is a calculated value.
 	Domain Name is $env:USERDNSDOMAIN.
 	Username is $env:USERNAME.
 	Folder Name is a script variable.
@@ -125,7 +125,7 @@
 
 	This parameter is disabled by default.
 .PARAMETER CompanyAddress
-	Company Address to use for the Cover Page, if the Cover Page has the Address field.
+	Company Address to use for the Cover Page if the Cover Page has the Address field.
 	
 	The following Cover Pages have an Address field:
 		Banded (Word 2013/2016)
@@ -141,7 +141,7 @@
 	This parameter is only valid with the MSWORD and PDF output parameters.
 	This parameter has an alias of CA.
 .PARAMETER CompanyEmail
-	Company Email to use for the Cover Page, if the Cover Page has the Email field. 
+	Company Email to use for the Cover Page if the Cover Page has the Email field. 
 	
 	The following Cover Pages have an Email field:
 		Facet (Word 2013/2016)
@@ -149,7 +149,7 @@
 	This parameter is only valid with the MSWORD and PDF output parameters.
 	This parameter has an alias of CE.
 .PARAMETER CompanyFax
-	Company Fax to use for the Cover Page, if the Cover Page has the Fax field. 
+	Company Fax to use for the Cover Page if the Cover Page has the Fax field. 
 	
 	The following Cover Pages have a Fax field:
 		Contrast (Word 2010)
@@ -311,6 +311,19 @@
 	Outputs to PDF.
 	Prompts for credentials for the LocalHost RAS Server.
 .EXAMPLE
+	PS C:\PSScript >.\RAS_Inventory_V2.5.ps1 -Dev -ScriptInfo -Log
+	
+	Creates an HTML report.
+	
+	Creates a text file named RASInventoryScriptErrors_yyyyMMddTHHmmssffff.txt that 
+	contains up to the last 250 errors reported by the script.
+	
+	Creates a text file named RASInventoryScriptInfo_yyyy-MM-dd_HHmm.txt that 
+	contains all the script parameters and other basic information.
+	
+	Creates a text file for transcript logging named 
+	RASDocScriptTranscript_yyyyMMddTHHmmssffff.txt.
+.EXAMPLE
 	PS C:\PSScript > .\RAS_Inventory_V2.5.ps1 -SmtpServer mail.domain.tld -From 
 	RASAdmin@domain.tld -To ITGroup@domain.tld -Text
 
@@ -407,9 +420,9 @@
 	text document.
 .NOTES
 	NAME: RAS_Inventory_V2.5.ps1
-	VERSION: 2.51
+	VERSION: 2.52
 	AUTHOR: Carl Webster
-	LASTEDIT: September 11, 2021
+	LASTEDIT: February 7, 2022
 #>
 
 
@@ -519,6 +532,39 @@ Param(
 
 #Version 1.0 released to the community on 5-August-2020
 #Work on 2.0 started on 20-Sep-2020
+#
+#Version 2.52 7-Feb-2022
+#	Added Function GetRASStatus to return the full status text for several RAS Status cmdlets
+#		Updated all AgentState outputs to use the value from GetRASStatus
+#	Added HALB output
+#		Virtual Servers
+#			Properties
+#			General
+#			LB gateway payload
+#			LB SSL payload
+#			Devices
+#			Advanced
+#	Changed the date format for the transcript and error log files from yyyy-MM-dd_HHmm format to the FileDateTime format
+#		The format is yyyyMMddTHHmmssffff (case-sensitive, using a 4-digit year, 2-digit month, 2-digit day, 
+#		the letter T as a time separator, 2-digit hour, 2-digit minute, 2-digit second, and 4-digit millisecond). 
+#		For example: 20221225T0840107271.
+#	Fixed call to Get-RASThemeFooterURL to always return an array (Thanks to Thomas Krampe for the debugging time)
+#	Fixed missing RDS Group Default settings (Thanks to Thomas Krampe)
+#	Fixed several logic errors where I assumed there were always RDS groups
+#	Fixed the German Table of Contents (Thanks to Rene Bigler)
+#		From 
+#			'de-'	{ 'Automatische Tabelle 2'; Break }
+#		To
+#			'de-'	{ 'Automatisches Verzeichnis 2'; Break }
+#	For Policy setting Session/Connection/Primary connection/Login/Auto Login, change property name AutoStart to AutoLogin
+#	In Function AbortScript, add test for the winword process and terminate it if it is running
+#		Added stopping the transcript log if the log was enabled and started
+#	In Function OutputFarmSite, only get the first Publishing Agent server for the Farm/Site settings
+#	In Functions AbortScript and SaveandCloseDocumentandShutdownWord, add code from Guy Leech to test for the "Id" property before using it
+#	Replaced most script Exit calls with AbortScript to stop the transcript log if the log was enabled and started
+#	Updated the help text
+#	Updated the ReadMe file
+#	Updated to allow running the script for RAS versions greater than 18.1
 #
 #Version 2.51 11-Sep-2021
 #	Added array error checking for non-empty arrays before attempting to create the Word table for most Word tables
@@ -771,14 +817,66 @@ Param(
 #		properties to the PowerShell cmdlets, add those four properties to the relevant report sections
 #
 
+Function AbortScript
+{
+	If($MSWord -or $PDF)
+	{
+		Write-Verbose "$(Get-Date -Format G): System Cleanup"
+		If(Test-Path variable:global:word)
+		{
+			$Script:Word.quit()
+			[System.Runtime.Interopservices.Marshal]::ReleaseComObject($Script:Word) | Out-Null
+			Remove-Variable -Name word -Scope Global 4>$Null
+		}
+	}
+	[gc]::collect() 
+	[gc]::WaitForPendingFinalizers()
+
+	If($MSWord -or $PDF)
+	{
+		#is the winword Process still running? kill it
+
+		#find out our session (usually "1" except on TS/RDC or Citrix)
+		$SessionID = (Get-Process -PID $PID).SessionId
+
+		#Find out if winword running in our session
+		$wordprocess = ((Get-Process 'WinWord' -ea 0) | Where-Object {$_.SessionId -eq $SessionID}) | Select-Object -Property Id 
+		If( $wordprocess -and $wordprocess.Id -gt 0)
+		{
+			Write-Verbose "$(Get-Date -Format G): WinWord Process is still running. Attempting to stop WinWord Process # $($wordprocess.Id)"
+			Stop-Process $wordprocess.Id -EA 0
+		}
+	}
+	
+	Write-Verbose "$(Get-Date -Format G): Script has been aborted"
+	#stop transcript logging
+	If($Log -eq $True) 
+	{
+		If($Script:StartLog -eq $True) 
+		{
+			try 
+			{
+				Stop-Transcript | Out-Null
+				Write-Verbose "$(Get-Date -Format G): $Script:LogPath is ready for use"
+			} 
+			catch 
+			{
+				Write-Verbose "$(Get-Date -Format G): Transcript/log stop failed"
+			}
+		}
+	}
+	$ErrorActionPreference = $SaveEAPreference
+	Exit
+}
+
 Set-StrictMode -Version Latest
 
 #force  on
 $PSDefaultParameterValues = @{"*:Verbose"=$True}
 $Script:emailCredentials  = $Null
-$script:MyVersion         = '2.51'
+$script:MyVersion         = '2.52'
 $Script:ScriptName        = "RAS_Inventory_V2.5.ps1"
-$tmpdate                  = [datetime] "09/11/2021"
+$tmpdate                  = [datetime] "02/07/2022"
 $Script:ReleaseDate       = $tmpdate.ToUniversalTime().ToShortDateString()
 
 If($MSWord -eq $False -and $PDF -eq $False -and $Text -eq $False -and $HTML -eq $False)
@@ -860,7 +958,7 @@ If($Script:pwdpath.EndsWith("\"))
 If($Log) 
 {
 	#start transcript logging
-	$Script:LogPath = "$Script:pwdpath\RASDocScriptTranscript_$(Get-Date -f yyyy-MM-dd_HHmm).txt"
+	$Script:LogPath = "$Script:pwdpath\RASDocScriptTranscript_$(Get-Date -f FileDateTime).txt"
 	
 	try 
 	{
@@ -878,7 +976,7 @@ If($Log)
 If($Dev)
 {
 	$Error.Clear()
-	$Script:DevErrorFile = "$Script:pwdpath\RASInventoryScriptErrors_$(Get-Date -f yyyy-MM-dd_HHmm).txt"
+	$Script:DevErrorFile = "$Script:pwdpath\RASInventoryScriptErrors_$(Get-Date -f FileDateTime).txt"
 }
 
 If(![String]::IsNullOrEmpty($SmtpServer) -and [String]::IsNullOrEmpty($From) -and [String]::IsNullOrEmpty($To))
@@ -982,29 +1080,29 @@ If($MSWord -or $PDF)
 	[int]$wdFormatPDF             = 17
 	#http://blogs.technet.com/b/heyscriptingguy/archive/2006/03/01/how-can-i-right-align-a-single-column-in-a-word-table.aspx
 	#http://msdn.microsoft.com/en-us/library/office/ff835817%28v=office.15%29.aspx
-	#[int]$wdAlignParagraphLeft = 0
-	#[int]$wdAlignParagraphCenter = 1
-	#[int]$wdAlignParagraphRight = 2
+	[int]$wdAlignParagraphLeft = 0
+	[int]$wdAlignParagraphCenter = 1
+	[int]$wdAlignParagraphRight = 2
 	#http://msdn.microsoft.com/en-us/library/office/ff193345%28v=office.15%29.aspx
-	#[int]$wdCellAlignVerticalTop = 0
-	#[int]$wdCellAlignVerticalCenter = 1
-	#[int]$wdCellAlignVerticalBottom = 2
+	[int]$wdCellAlignVerticalTop = 0
+	[int]$wdCellAlignVerticalCenter = 1
+	[int]$wdCellAlignVerticalBottom = 2
 	#http://msdn.microsoft.com/en-us/library/office/ff844856%28v=office.15%29.aspx
 	[int]$wdAutoFitFixed = 0
 	[int]$wdAutoFitContent = 1
-	#[int]$wdAutoFitWindow = 2
+	[int]$wdAutoFitWindow = 2
 	#http://msdn.microsoft.com/en-us/library/office/ff821928%28v=office.15%29.aspx
-	#[int]$wdAdjustNone = 0
+	[int]$wdAdjustNone = 0
 	[int]$wdAdjustProportional = 1
-	#[int]$wdAdjustFirstColumn = 2
-	#[int]$wdAdjustSameWidth = 3
+	[int]$wdAdjustFirstColumn = 2
+	[int]$wdAdjustSameWidth = 3
 
 	[int]$PointsPerTabStop = 36
 	[int]$Indent0TabStops = 0 * $PointsPerTabStop
-	#[int]$Indent1TabStops = 1 * $PointsPerTabStop
-	#[int]$Indent2TabStops = 2 * $PointsPerTabStop
-	#[int]$Indent3TabStops = 3 * $PointsPerTabStop
-	#[int]$Indent4TabStops = 4 * $PointsPerTabStop
+	[int]$Indent1TabStops = 1 * $PointsPerTabStop
+	[int]$Indent2TabStops = 2 * $PointsPerTabStop
+	[int]$Indent3TabStops = 3 * $PointsPerTabStop
+	[int]$Indent4TabStops = 4 * $PointsPerTabStop
 
 	# http://www.thedoctools.com/index.php?show=wt_style_names_english_danish_german_french
 	[int]$wdStyleHeading1 = -2
@@ -1013,7 +1111,7 @@ If($MSWord -or $PDF)
 	[int]$wdStyleHeading4 = -5
 	[int]$wdStyleNoSpacing = -158
 	[int]$wdTableGrid = -155
-	#[int]$wdTableLightListAccent3 = -206
+	[int]$wdTableLightListAccent3 = -206
 
 	#http://groovy.codehaus.org/modules/scriptom/1.6.0/scriptom-office-2K3-tlb/apidocs/org/codehaus/groovy/scriptom/tlb/office/word/WdLineStyle.html
 	[int]$wdLineStyleNone = 0
@@ -1122,7 +1220,8 @@ Function SetWordHashTable
 		{
 			'ca-'	{ 'Taula automática 2'; Break }
 			'da-'	{ 'Automatisk tabel 2'; Break }
-			'de-'	{ 'Automatische Tabelle 2'; Break }
+			#'de-'	{ 'Automatische Tabelle 2'; Break }
+			'de-'	{ 'Automatisches Verzeichnis 2'; Break } #changed 6-feb-2022 rene bigler
 			'en-'	{ 'Automatic Table 2'; Break }
 			'es-'	{ 'Tabla automática 2'; Break }
 			'fi-'	{ 'Automaattinen taulukko 2'; Break }
@@ -1674,7 +1773,7 @@ Function SetupWord
 		`n`n
 	Script cannot Continue.
 		`n`n"
-		Exit
+		AbortScript
 	}
 
 	Write-Verbose "$(Get-Date -Format G): Determine Word language value"
@@ -1737,7 +1836,7 @@ Function SetupWord
 	Script cannot Continue.
 		`n`n
 		"
-		Exit
+		AbortScript
 	}
 	Else
 	{
@@ -1766,7 +1865,7 @@ Function SetupWord
 		Company Name is blank so Cover Page will not show a Company Name.
 		Check HKCU:\Software\Microsoft\Office\Common\UserInfo for Company or CompanyName value.
 		You may want to use the -CompanyName parameter if you need a Company Name on the cover page.
-			" -Foreground White
+			" -ForegroundColor White
 			$Script:CoName = $TmpName
 		}
 		Else
@@ -1927,7 +2026,7 @@ Function SetupWord
 
 	$BuildingBlocksCollection | 
 	ForEach-Object {
-		If ($_.BuildingBlockEntries.Item($CoverPage).Name -eq $CoverPage) 
+		If($_.BuildingBlockEntries.Item($CoverPage).Name -eq $CoverPage) 
 		{
 			$BuildingBlocks = $_
 		}
@@ -1956,8 +2055,8 @@ Function SetupWord
 	If(!$Script:CoverPagesExist)
 	{
 		Write-Verbose "$(Get-Date -Format G): Cover Pages are not installed or the Cover Page $($CoverPage) does not exist."
-		Write-Host "Cover Pages are not installed or the Cover Page $($CoverPage) does not exist." -Foreground White
-		Write-Host "This report will not have a Cover Page." -Foreground White
+		Write-Host "Cover Pages are not installed or the Cover Page $($CoverPage) does not exist." -ForegroundColor White
+		Write-Host "This report will not have a Cover Page." -ForegroundColor White
 	}
 
 	Write-Verbose "$(Get-Date -Format G): Create empty word doc"
@@ -2015,8 +2114,8 @@ Function SetupWord
 		If($Null -eq $toc)
 		{
 			Write-Verbose "$(Get-Date -Format G): "
-			Write-Host "Table of Content - $($Script:MyHash.Word_TableOfContents) could not be retrieved." -Foreground White
-			Write-Host "This report will not have a Table of Contents." -Foreground White
+			Write-Host "Table of Content - $($Script:MyHash.Word_TableOfContents) could not be retrieved." -ForegroundColor White
+			Write-Host "This report will not have a Table of Contents." -ForegroundColor White
 		}
 		Else
 		{
@@ -2025,8 +2124,8 @@ Function SetupWord
 	}
 	Else
 	{
-		Write-Host "Table of Contents are not installed." -Foreground White
-		Write-Host "Table of Contents are not installed so this report will not have a Table of Contents." -Foreground White
+		Write-Host "Table of Contents are not installed." -ForegroundColor White
+		Write-Host "Table of Contents are not installed so this report will not have a Table of Contents." -ForegroundColor White
 	}
 
 	#set the footer
@@ -2038,7 +2137,7 @@ Function SetupWord
 	$Script:Doc.ActiveWindow.ActivePane.view.SeekView = $wdSeekPrimaryFooter
 	#get the footer and format font
 	$footers = $Script:Doc.Sections.Last.Footers
-	ForEach ($footer in $footers) 
+	ForEach($footer in $footers) 
 	{
 		If($footer.exists) 
 		{
@@ -2220,17 +2319,17 @@ Function line
 
 	while( $tabs -gt 0 )
 	{
-		$null = $Script:Output.Append( "`t" )
+		$Null = $script:Output.Append( "`t" )
 		$tabs--
 	}
 
 	If( $nonewline )
 	{
-		$null = $Script:Output.Append( $name + $value )
+		$Null = $script:Output.Append( $name + $value )
 	}
 	Else
 	{
-		$null = $Script:Output.AppendLine( $name + $value )
+		$Null = $script:Output.AppendLine( $name + $value )
 	}
 }
 
@@ -3318,7 +3417,6 @@ Function SaveandCloseDocumentandShutdownWord
 	{
 		#the $saveFormat below passes StrictMode 2
 		#I found this at the following two links
-		#http://blogs.technet.com/b/bshukla/archive/2011/09/27/3347395.aspx
 		#http://msdn.microsoft.com/en-us/library/microsoft.office.interop.word.wdsaveformat(v=office.14).aspx
 		If($PDF)
 		{
@@ -3362,23 +3460,24 @@ Function SaveandCloseDocumentandShutdownWord
 	$Script:Word.Quit()
 	Write-Verbose "$(Get-Date -Format G): System Cleanup"
 	[System.Runtime.Interopservices.Marshal]::ReleaseComObject($Script:Word) | Out-Null
-	Remove-Variable -Name word -Scope Script 4>$Null
-	Remove-Variable -Name Doc  -Scope Script 4>$Null
+	If(Test-Path variable:global:word)
+	{
+		Remove-Variable -Name word -Scope Global 4>$Null
+	}
 	$SaveFormat = $Null
 	[gc]::collect() 
 	[gc]::WaitForPendingFinalizers()
 	
-	#is the winword process still running? kill it
+	#is the winword Process still running? kill it
 
 	#find out our session (usually "1" except on TS/RDC or Citrix)
 	$SessionID = (Get-Process -PID $PID).SessionId
 
-	#Find out if winword is running in our session
-	$wordprocess = $Null
-	$wordprocess = (Get-Process 'WinWord' -ea 0) | Where-Object {$_.SessionId -eq $SessionID}
-	If($null -ne $wordprocess -and $wordprocess.Id -gt 0)
+	#Find out if winword running in our session
+	$wordprocess = ((Get-Process 'WinWord' -ea 0) | Where-Object {$_.SessionId -eq $SessionID}) | Select-Object -Property Id 
+	If( $wordprocess -and $wordprocess.Id -gt 0)
 	{
-		Write-Verbose "$(Get-Date -Format G): WinWord process is still running. Attempting to stop WinWord process # $($wordprocess.Id)"
+		Write-Verbose "$(Get-Date -Format G): WinWord Process is still running. Attempting to stop WinWord Process # $($wordprocess.Id)"
 		Stop-Process $wordprocess.Id -EA 0
 	}
 }
@@ -3403,7 +3502,8 @@ Function SaveandCloseTextDocument
 	Write-Verbose "$(Get-Date -Format G): Saving Text file"
 	Line 0 ""
 	Line 0 "Report Complete"
-	Write-Output $global:Output.ToString() | Out-File $Script:TextFileName 4>$Null
+	Write-Output $script:Output.ToString() | Out-File $Script:TextFileName 4>$Null
+	[System.Text.StringBuilder] $Script:Output = New-Object System.Text.StringBuilder( 16384 )
 }
 
 Function SaveandCloseHTMLDocument
@@ -3672,38 +3772,6 @@ Function ShowScriptOptions
 	Write-Verbose "$(Get-Date -Format G): "
 	Write-Verbose "$(Get-Date -Format G): "
 }
-
-Function AbortScript
-{
-	If($MSWord -or $PDF)
-	{
-		If(Test-Path variable:script:word)
-		{
-			$Script:Word.quit()
-			Write-Verbose "$(Get-Date -Format G): System Cleanup"
-			[System.Runtime.Interopservices.Marshal]::ReleaseComObject($Script:Word) | Out-Null
-			Remove-Variable -Name word -Scope Script 4>$Null
-		}
-		#is the winword process still running? kill it
-
-		#find out our session (usually "1" except on TS/RDC or Citrix)
-		$SessionID = (Get-Process -PID $PID).SessionId
-
-		#Find out if winword is running in our session
-		$wordprocess = $Null
-		$wordprocess = (Get-Process 'WinWord' -ea 0) | Where-Object {$_.SessionId -eq $SessionID}
-		If($null -ne $wordprocess -and $wordprocess.Id -gt 0)
-		{
-			Write-Verbose "$(Get-Date -Format G): WinWord process is still running. Attempting to stop WinWord process # $($wordprocess.Id)"
-			Stop-Process $wordprocess.Id -EA 0
-		}
-	}
-	[gc]::collect() 
-	[gc]::WaitForPendingFinalizers()
-	Write-Verbose "$(Get-Date -Format G): Script has been aborted"
-	Exit
-}
-
 #endregion
 
 #region email function
@@ -3949,7 +4017,7 @@ Function ProcessScriptSetup
 		
 		$Script:RASVersion = "$($tmp[0]).$($tmp[1])"
 		
-		If([version]$Script:RASVersion -eq [version]"18.1")
+		If([version]$Script:RASVersion -ge [version]"18.1")
 		{
 			#we are good
 		}
@@ -4086,7 +4154,7 @@ Function ProcessScriptEnd
 		}
 		Out-File -FilePath $SIFile -Append -InputObject "" 4>$Null
 		Out-File -FilePath $SIFile -Append -InputObject "OS Detected          : $Script:RunningOS" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "PoSH version         : $Host.Version" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "PoSH version         : $($Host.Version)" 4>$Null
 		Out-File -FilePath $SIFile -Append -InputObject "PSCulture            : $PSCulture" 4>$Null
 		Out-File -FilePath $SIFile -Append -InputObject "PSUICulture          : $PSUICulture" 4>$Null
 		Out-File -FilePath $SIFile -Append -InputObject "RAS Version          : $Script:RASVersion" 4>$Null
@@ -4306,7 +4374,7 @@ Function OutputFarmSite
 	}
 	Else
 	{
-		$Results = Get-RASPA -SiteId $Site.Id -EA 0 4> $Null
+		$Results = Get-RASPA -SiteId $Site.Id -EA 0 4> $Null | Select -First 1 #changed in 2.52 to only get the first PA
 		
 		If($? -and $Null -ne $Results)
 		{
@@ -4326,7 +4394,7 @@ Function OutputFarmSite
 		{
 			$Type = "Secondary Site"
 		}
-		$State = $SiteSettings.AgentState
+		$State = GetRASStatus $SiteSettings.AgentState
 		$ID = $Site.Id
 	}
 	
@@ -4480,6 +4548,80 @@ Function GetVDIType
 	Return $VDIType
 }
 
+Function GetRASStatus
+{
+	Param([string] $RASStatus)
+	
+	Switch ($RASStatus)
+	{
+		"Broken"						{$FullRASStatus = "Agent broken state"; Break}
+		"BrokerNoAvailableGWs"			{$FullRASStatus = "There are no gateways that the Tenant Broker can use to process connections"; Break}
+		"CloningCanceled"				{$FullRASStatus = "Cloning is being cancelled"; Break}
+		"CloningFailed"					{$FullRASStatus = "Cloning process failed"; Break}
+		"CloningInProgress"				{$FullRASStatus = "Cloning for RAS Template is in progress"; Break}
+		"ConnectionFailed"				{$FullRASStatus = "Agent cannot connect to the host"; Break}
+		"DisabledFromSettings"			{$FullRASStatus = "Agent was disabled from configuration but it's still available in the runtime"; Break}
+		"Disconnected"					{$FullRASStatus = "Agent is not connected to any RAS Publishing Agent"; Break}
+		"EnrollmentUnavailable"			{$FullRASStatus = "Enrollment agent certificated was not created"; Break}
+		"EnrollServerNotInitialized"	{$FullRASStatus = "Enrollment agent not initialized (i.e. waiting for new settings)"; Break}
+		"EnumSessionsFailed"			{$FullRASStatus = "Failed to get sessions information from the agent"; Break}
+		"ForcedDisconnect"				{$FullRASStatus = "Agent forced to disconnect"; Break}
+		"FreeESXLicenseNotSupported"	{$FullRASStatus = "Free ESX License is not supported with RAS"; Break}
+		"FSLogixNeedsUpdate"			{$FullRASStatus = "Version of installed FSLogix older than the one in configuration"; Break}
+		"FSLogixNotAvail"				{$FullRASStatus = "FSLogix is not available"; Break}
+		"HotfixKB2580360NotInstalled"	{$FullRASStatus = "Hotfix KB2580360 not installed on the host. This is required by the RAS Vdi Agent to connect to the host"; Break}
+		"ImageOptimization"				{$FullRASStatus = "Image optimization is in active state"; Break}
+		"ImageOptimizationPending"		{$FullRASStatus = "Image optimization is in pending state"; Break}
+		"InstallingRDSRole"				{$FullRASStatus = "Installation of RDS role is in progress"; Break}
+		"InUse"							{$FullRASStatus = "Agent is already connected to another farm"; Break}
+		"Invalid"						{$FullRASStatus = "WVD object data corrupted"; Break}
+		"InvalidCAConfig"				{$FullRASStatus = "Invalid Certificate Authority configuration"; Break}
+		"InvalidCredentials"			{$FullRASStatus = "Connection to host failed because of invalid credentials"; Break}
+		"InvalidEAUserCredentials"		{$FullRASStatus = "Invalid enrollment agent credentials"; Break}
+		"InvalidESSettings"				{$FullRASStatus = "Invalid Enrollment Agent Settings"; Break}
+		"InvalidHostVersion"			{$FullRASStatus = "Invalid Provider version"; Break}
+		"JoinBroken"					{$FullRASStatus = "The tenant failed to connect to Tenant Broker"; Break}
+		"LicenseExpired"				{$FullRASStatus = "The tenant License has expired"; Break}
+		"LogonDisabled"					{$FullRASStatus = "Disable user login from sessions"; Break}
+		"LogonDrain"					{$FullRASStatus = "New logons disabled (drain mode)"; Break}
+		"LogonDrainUntilRestart"		{$FullRASStatus = "New logons disabled (drain mode) until restart"; Break}
+		"ManagedESXNotSupported"		{$FullRASStatus = "Managed ESX License is not supported by RAS"; Break}
+		"MarkedForDeletion"				{$FullRASStatus = "Agent is marked for deletion"; Break}
+		"MaxNonCompletedSessions"		{$FullRASStatus = "Maximum number of non-completed sessions limit reached"; Break}
+		"MembersNeedUpdate"				{$FullRASStatus = "One or more members in the host pool is in need update state"; Break}
+		"NeedsAttention"				{$FullRASStatus = "HALB Instance: One or more HALB devices are not configured OR WVD HostPool is empty (no hosts assigned)"; Break}
+		"NeedsDowngrade"				{$FullRASStatus = "Agent version is greater than the RAS Publishing Agent version"; Break}
+		"NeedsSysprep"					{$FullRASStatus = "Guest agent needs Sysprep answer file"; Break}
+		"NeedsUpdate"					{$FullRASStatus = "Agent version is less than the RAS Server version"; Break}
+		"NoDevices"						{$FullRASStatus = "HALB Instance: No HALB devices are configured"; Break}
+		"NoMembersAvailable"			{$FullRASStatus = "No members in the host pool"; Break}
+		"NonRAS"						{$FullRASStatus = "Non RAS agent (WVD related agents)"; Break}
+		"NotApplied"					{$FullRASStatus = "Agent settings not applied"; Break}
+		"NotInUse"						{$FullRASStatus = "Agent is not connect to any farm"; Break}
+		"NotJoined"						{$FullRASStatus = "Tenant is invited to join or has been added to the farm but not yet joined"; Break}
+		"NotVerified"					{$FullRASStatus = "Agent not connected to RAS Publishing Agent and cannot be used"; Break}
+		"OK"							{$FullRASStatus = "Agent is working correctly"; Break}
+		"PortMismatch"					{$FullRASStatus = "Port mismatch found on the agent because it's already in use"; Break}
+		"Provisioning"					{$FullRASStatus = "A clone is being provisioned from the assigned template"; Break}
+		"RASprepInProgress"				{$FullRASStatus = "RASprep in progress on machine"; Break}
+		"RASScheduleInProgress"			{$FullRASStatus = "Disabled (scheduler)"; Break}
+		"RDSRoleDisabled"				{$FullRASStatus = "RD Session Host disabled or denying connections"; Break}
+		"RebootPending"					{$FullRASStatus = "Reboot of machine is pending"; Break}
+		"ServerDeleted"					{$FullRASStatus = "Agent was removed from configuration."; Break}
+		"StandBy"						{$FullRASStatus = "Agent is in standby mode"; Break}
+		"Synchronising"					{$FullRASStatus = "Synchronizing agent settings is in progress"; Break}
+		"SysPrepInProgress"				{$FullRASStatus = "SysPrep in progress on machine"; Break}
+		"Unavailable"					{$FullRASStatus = "Agent is not available since depending objects are not available or empty"; Break}
+		"UnderConstruction"				{$FullRASStatus = "Agent under construction"; Break}
+		"Unknown"						{$FullRASStatus = "No agent state information available"; Break}
+		"Unsupported"					{$FullRASStatus = "Agent version is no longer supported or agent's OS no longer supported"; Break}
+		"UnsupportedVDIType"			{$FullRASStatus = "Provider type is not supported"; Break}
+		Default							{$FullRASStatus = "Unable to determine Provider Status: $($ProviderStatus)"; Break}
+	}
+	
+	Return $FullRASStatus
+}
+
 Function OutputSite
 {
 	Param([object]$Site)
@@ -4588,11 +4730,13 @@ Function OutputSite
 			Else
 			{
 				$Sessions = "$($RDSStatus.ActiveSessions)/$($RDSHost.MaxSessions)"
+				$RDSStatusAgentState = GetRASStatus $RDSStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Address"; Value = $RDSHost.Server; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $RDSStatus.AgentState; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $RDSStatusAgentState; }) > $Null
 					$ScriptInformation.Add(@{Data = "CPU"; Value = "$($RDSStatus.CPULoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "RAM"; Value = "$($RDSStatus.MemLoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "Disk read time"; Value = "$($RDSStatus.DiskRead)%"; }) > $Null
@@ -4623,7 +4767,7 @@ Function OutputSite
 				If($Text)
 				{
 					Line 2 "Address`t`t: " $RDSHost.Server
-					Line 2 "Status`t`t: " $RDSStatus.AgentState
+					Line 2 "Status`t`t: " $RDSStatusAgentState
 					Line 2 "CPU`t`t: " "$($RDSStatus.CPULoad)%"
 					Line 2 "RAM`t`t: " "$($RDSStatus.MemLoad)%"
 					Line 2 "Disk read time`t: " "$($RDSStatus.DiskRead)%"
@@ -4638,7 +4782,7 @@ Function OutputSite
 				{
 					$rowdata = @()
 					$columnHeaders = @("Address",($Script:htmlsb),$RDSHost.Server,$htmlwhite)
-					$rowdata += @(,("Status",($Script:htmlsb),$RDSStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$RDSStatusAgentState,$htmlwhite))
 					$rowdata += @(,("CPU",($Script:htmlsb),"$($RDSStatus.CPULoad)%",$htmlwhite))
 					$rowdata += @(,("RAM",($Script:htmlsb),"$($RDSStatus.MemLoad)%",$htmlwhite))
 					$rowdata += @(,("Disk read time",($Script:htmlsb),"$($RDSStatus.DiskRead)%",$htmlwhite))
@@ -4755,11 +4899,13 @@ Function OutputSite
 			}
 			Else
 			{
+				$FullProviderStatus = GetRASStatus $VDIHostStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Address"; Value = $VDIHost.Server; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $VDIHostStatus.AgentState.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $FullProviderStatus; }) > $Null
 					$ScriptInformation.Add(@{Data = "CPU"; Value = "$($VDIHostStatus.CPULoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "RAM"; Value = "$($VDIHostStatus.MemLoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "Disk read time"; Value = "$($VDIHostStatus.DiskRead)%"; }) > $Null
@@ -4789,7 +4935,7 @@ Function OutputSite
 				If($Text)
 				{
 					Line 2 "Address`t`t: " $VDIHost.Server
-					Line 2 "Status`t`t: " $VDIHostStatus.AgentState.ToString()
+					Line 2 "Status`t`t: " $FullProviderStatus
 					Line 2 "CPU`t`t: " "$($VDIHostStatus.CPULoad)%"
 					Line 2 "RAM`t`t: " "$($VDIHostStatus.MemLoad)%"
 					Line 2 "Disk read time`t: " "$($VDIHostStatus.DiskRead)%"
@@ -4803,7 +4949,7 @@ Function OutputSite
 				{
 					$rowdata = @()
 					$columnHeaders = @("Address",($Script:htmlsb),$VDIHost.Server,$htmlwhite)
-					$rowdata += @(,("Status",($Script:htmlsb),$VDIHostStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$FullProviderStatus,$htmlwhite))
 					$rowdata += @(,("CPU",($Script:htmlsb),"$($VDIHostStatus.CPULoad)%",$htmlwhite))
 					$rowdata += @(,("RAM",($Script:htmlsb),"$($VDIHostStatus.MemLoad)%",$htmlwhite))
 					$rowdata += @(,("Disk read time",($Script:htmlsb),"$($VDIHostStatus.DiskRead)%",$htmlwhite))
@@ -4920,11 +5066,13 @@ Function OutputSite
 			Else
 			{
 				$Sessions = ($GWStatus.ActiveRDPSessions + $GWStatus.ActiveRDPSSLSessions)
+				$GWStatusAgentState = GetRASStatus $GWStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Address"; Value = $GW.Server; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $GWStatus.AgentState; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $GWStatusAgentState; }) > $Null
 					$ScriptInformation.Add(@{Data = "CPU"; Value = "$($GWStatus.CPULoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "RAM"; Value = "$($GWStatus.MemLoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "Disk read time"; Value = "$($GWStatus.DiskRead)%"; }) > $Null
@@ -4955,7 +5103,7 @@ Function OutputSite
 				If($Text)
 				{
 					Line 2 "Address`t`t: " $GW.Server
-					Line 2 "Status`t`t: " $GWStatus.AgentState
+					Line 2 "Status`t`t: " $GWStatusAgentState
 					Line 2 "CPU`t`t: " "$($GWStatus.CPULoad)%"
 					Line 2 "RAM`t`t: " "$($GWStatus.MemLoad)%"
 					Line 2 "Disk read time`t: " "$($GWStatus.DiskRead)%"
@@ -4970,7 +5118,7 @@ Function OutputSite
 				{
 					$rowdata = @()
 					$columnHeaders = @("Address",($Script:htmlsb),$GW.Server,$htmlwhite)
-					$rowdata += @(,("Status",($Script:htmlsb),$GWStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$GWStatusAgentState.ToString(),$htmlwhite))
 					$rowdata += @(,("CPU",($Script:htmlsb),"$($GWStatus.CPULoad)%",$htmlwhite))
 					$rowdata += @(,("RAM",($Script:htmlsb),"$($GWStatus.MemLoad)%",$htmlwhite))
 					$rowdata += @(,("Disk read time",($Script:htmlsb),"$($GWStatus.DiskRead)%",$htmlwhite))
@@ -5087,11 +5235,13 @@ Function OutputSite
 			}
 			Else
 			{
+				$PAStatusAgentState = GetRASStatus $PAStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Address"; Value = $PA.Server; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $PAStatus.AgentState; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $PAStatusAgentState; }) > $Null
 					$ScriptInformation.Add(@{Data = "CPU"; Value = "$($PAStatus.CPULoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "RAM"; Value = "$($PAStatus.MemLoad)%"; }) > $Null
 					$ScriptInformation.Add(@{Data = "Disk read time"; Value = "$($PAStatus.DiskRead)%"; }) > $Null
@@ -5120,7 +5270,7 @@ Function OutputSite
 				If($Text)
 				{
 					Line 2 "Address`t`t: " $PA.Server
-					Line 2 "Status`t`t: " $PAStatus.AgentState
+					Line 2 "Status`t`t: " $PAStatusAgentState
 					Line 2 "CPU`t`t: " "$($PAStatus.CPULoad)%"
 					Line 2 "RAM`t`t: " "$($PAStatus.MemLoad)%"
 					Line 2 "Disk read time`t: " "$($PAStatus.DiskRead)%"
@@ -5133,7 +5283,7 @@ Function OutputSite
 				{
 					$rowdata = @()
 					$columnHeaders = @("Address",($Script:htmlsb),$PA.Server,$htmlwhite)
-					$rowdata += @(,("Status",($Script:htmlsb),$PAStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$PAStatusAgentState.ToString(),$htmlwhite))
 					$rowdata += @(,("CPU",($Script:htmlsb),"$($PAStatus.CPULoad)%",$htmlwhite))
 					$rowdata += @(,("RAM",($Script:htmlsb),"$($PAStatus.MemLoad)%",$htmlwhite))
 					$rowdata += @(,("Disk read time",($Script:htmlsb),"$($PAStatus.DiskRead)%",$htmlwhite))
@@ -5264,73 +5414,8 @@ Function OutputSite
 
 				$LogonStatus = "N/A"
 				$Status      = "N/A"
-				
-				Switch ($RDSStatus.AgentState)
-				{
-					"Broken"						{$Status = "Broken"; Break}
-					"BrokerNoAvailableGWs"			{$Status = "Broker no available Gateways"; Break}
-					"CloningCanceled"				{$Status = "Cloning canceled"; Break}
-					"CloningFailed"					{$Status = "Cloning failed"; Break}
-					"CloningInProgress"				{$Status = "Cloning in progress"; Break}
-					"ConnectionFailed"				{$Status = "Connection failed"; Break}
-					"DisabledFromSettings"			{$Status = "Disabled from settings"; Break}
-					"Disconnected"					{$Status = "Disconnected"; Break}
-					"EnrollmentUnavailable"			{$Status = "Enrollment unavailable"; Break}
-					"EnrollServerNotInitialized"	{$Status = "Enrollment server not available"; Break}
-					"EnumSessionsFailed"			{$Status = "Enum sessions failed"; Break}
-					"ForcedDisconnect"				{$Status = "Forced disconnect"; Break}
-					"FreeESXLicenseNotSupported"	{$Status = "Free ESX license is not supported"; Break}
-					"FSLogixNeedsUpdate"			{$Status = "FSLogix needs updating"; Break}
-					"FSLogixNotAvail"				{$Status = "FSLogix not available"; Break}
-					"HotfixKB2580360NotInstalled"	{$Status = "Hotfix KB2580360 is not installed"; Break}
-					"ImageOptimization"				{$Status = "Image optimization"; Break}
-					"ImageOptimizationPending"		{$Status = "Image optimization pending"; Break}
-					"InstallingRDSRole"				{$Status = "Installaing RDS Role"; Break}
-					"InUse"							{$Status = "In use"; Break}
-					"Invalid"						{$Status = "Invalid"; Break}
-					"InvalidCAConfig"				{$Status = "Invalid CA configuration"; Break}
-					"InvalidCredentials"			{$Status = "Invalid credentials"; Break}
-					"InvalidEAUserCredentials"		{$Status = "Invalid EA user credentials"; Break}
-					"InvalidESSettings"				{$Status = "Invalid ES settings"; Break}
-					"InvalidHostVersion"			{$Status = "Invalid host version"; Break}
-					"JoinBroken"					{$Status = "Join broken"; Break}
-					"LicenseExpired"				{$Status = "License expired"; Break}
-					"LogonDisabled"					{$Status = "New logons and reconnections disabled"; Break}
-					"LogonDrain"					{$Status = "Logons drain"; Break}
-					"LogonDrainUntilRestart"		{$Status = "Logons disabled until reboot"; Break}
-					"ManagedESXNotSupported"		{$Status = "Managed ESX is not supported"; Break}
-					"MarkedForDeletion"				{$Status = "Marked for deletion"; Break}
-					"MaxNonCompletedSessions"		{$Status = "Maximum Noncompleted sessions"; Break}
-					"MembersNeedUpdate"				{$Status = "Members need updating"; Break}
-					"NeedsAttention"				{$Status = "Needs attention"; Break}
-					"NeedsDowngrade"				{$Status = "Needs downgrade"; Break}
-					"NeedsSysprep"					{$Status = "Needs sysprep"; Break}
-					"NeedsUpdate"					{$Status = "Needs update"; Break}
-					"NoDevices"						{$Status = "No devices"; Break}
-					"NoMembersAvailable"			{$Status = "No members available"; Break}
-					"NonRAS"						{$Status = "Non RAS"; Break}
-					"NotApplied"					{$Status = "Not applied"; Break}
-					"NotInUse"						{$Status = "Not in use"; Break}
-					"NotJoined"						{$Status = "Not joined"; Break}
-					"NotVerified"					{$Status = "Not verified"; Break}
-					"OK"							{$Status = "OK"; Break}
-					"PortMismatch"					{$Status = "Port mismatch"; Break}
-					"Provisioning"					{$Status = "Provisioning"; Break}
-					"RASprepInProgress"				{$Status = "RAS prep in progress"; Break}
-					"RASScheduleInProgress"			{$Status = "RAS schedule in progress"; Break}
-					"RDSRoleDisabled"				{$Status = "RDS Role disabled"; Break}
-					"RebootPending"					{$Status = "Reboot pending"; Break}
-					"ServerDeleted"					{$Status = "Server deleted"; Break}
-					"StandBy"						{$Status = "Standby"; Break}
-					"Synchronising"					{$Status = "Synchronising"; Break}
-					"SysPrepInProgress"				{$Status = "Sysprep in progress"; Break}
-					"Unavailable"					{$Status = "Unavailable"; Break}
-					"UnderConstruction"				{$Status = "Under construction"; Break}
-					"Unknown"						{$Status = "Unknown"; Break}
-					"Unsupported"					{$Status = "Unsupported"; Break}
-					"UnsupportedVDIType"			{$Status = "Unsupported VDI type"; Break}
-					Default							{$Status = "Unable to determine RDS Status Agent State: $($RDSStatus.AgentState)";Break}
-				}
+
+				$FullAgentStatus = GetRASStatus $RDSStatus.AgentState
 				
 				Switch($RDSStatus.LoginStatus)
 				{
@@ -5366,21 +5451,30 @@ Function OutputSite
 				}
 				
 				$RDSGroup = @()
+				
 				$Results = Get-RASRDSGroup -SiteId $Site.Id -EA 0 4>$Null
-				If( $Results.RDSIds -Contains $RDSHost.Id )
+				
+				If($? -and $Null -ne $Results)
 				{
-					$RDSGroup += $Results.Name
+					If($Results.RDSIds -Contains $RDSHost.Id )
+					{
+						$RDSGroup += $Results.Name
+					}
+					Else
+					{
+						$RDSGroup += ""
+					}
 				}
 				Else
 				{
-					$RDSGroup += ""
+					$RDSGroup += "N/A"
 				}
 				
 				If($MSWord -or $PDF)
 				{
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Server"; Value = $RDSHost.Server; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $Status; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $FullAgentStatus; }) > $Null
 					$ScriptInformation.Add(@{Data = "Logon status"; Value = $LogonStatus; }) > $Null
 					$ScriptInformation.Add(@{Data = "Group"; Value = $RDSGroup[0]; }) > $Null
 					$ScriptInformation.Add(@{Data = "Direct address"; Value = $RDSHost.DirectAddress; }) > $Null
@@ -5415,7 +5509,7 @@ Function OutputSite
 				If($Text)
 				{
 					Line 3 "Server`t`t`t: " $RDSHost.Server
-					Line 3 "Status`t`t`t: " $Status
+					Line 3 "Status`t`t`t: " $FullAgentStatus
 					Line 3 "Logon status`t`t: " $LogonStatus
 					Line 3 "Group`t`t`t: " $RDSGroup[0]
 					Line 3 "Direct address`t`t: " $RDSHost.DirectAddress
@@ -5434,7 +5528,7 @@ Function OutputSite
 				{
 					$rowdata = @()
 					$columnHeaders = @("Server",($Script:htmlsb),$RDSHost.Server,$htmlwhite)
-					$rowdata += @(,("Status",($Script:htmlsb),$Status,$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$FullAgentStatus,$htmlwhite))
 					$rowdata += @(,("Logon status",($Script:htmlsb),$LogonStatus,$htmlwhite))
 					$rowdata += @(,("Group",($Script:htmlsb),$RDSGroup[0],$htmlwhite))
 					$rowdata += @(,("Direct address",($Script:htmlsb),$RDSHost.DirectAddress,$htmlwhite))
@@ -5538,92 +5632,31 @@ Function OutputSite
 				#do we inherit group or site defaults?
 				#is this RDS host in a group?
 				$Results = Get-RASRDSGroup -SiteId $Site.Id -EA 0 4>$Null
-				If( $Results.RDSIds -Contains $RDSHost.Id )
+				
+				If($? -and $Null -ne $Results)
 				{
-					#does this group inherit default settings?
-					If($Results.InheritDefaultAgentSettings -eq $False)
+					If($Results.RDSIds -Contains $RDSHost.Id )
 					{
-						#no we don't, so get the default settings for the group
-						$GroupDefaults  = $Results.RDSDefSettings
+						#does this group inherit default settings?
+						If($Results.InheritDefaultAgentSettings -eq $False)
+						{
+							#no we don't, so get the default settings for the group
+							$GroupDefaults  = $Results.RDSDefSettings
 
-						$RDSPort        = $GroupDefaults.Port.ToString()
-						$RDSMaxSessions = $GroupDefaults.MaxSessions.ToString()
-						
-						Switch ($GroupDefaults.SessionTimeout)
-						{
-							0		{$RDSPublishingSessionDisconnectTimeout = "Never"; Break}
-							25		{$RDSPublishingSessionDisconnectTimeout = "25 seconds"; Break}
-							60		{$RDSPublishingSessionDisconnectTimeout = "1 minute"; Break}
-							300		{$RDSPublishingSessionDisconnectTimeout = "5 minutes"; Break}
-							3600	{$RDSPublishingSessionDisconnectTimeout = "1 hour"; Break}
-							Default	{$RDSPublishingSessionDisconnectTimeout = "Unable to determine Publishing Session Disconnect Timeout: $($GroupDefaults.SessionTimeout)"; Break}
-						}
-						
-						Switch ($GroupDefaults.SessionLogoffTimeout)
-						{
-							0		{$RDSPublishingSessionResetTime = "Never"; Break}
-							1		{$RDSPublishingSessionResetTime = "Immediate"; Break}
-							25		{$RDSPublishingSessionResetTime = "25 seconds"; Break}
-							60		{$RDSPublishingSessionResetTime = "1 minute"; Break}
-							300		{$RDSPublishingSessionResetTime = "5 minutes"; Break}
-							3600	{$RDSPublishingSessionResetTime = "1 hour"; Break}
-							Default	{$RDSPublishingSessionResetTime = "Unable to determine Publishing Session Reset Timeout: $($GroupDefaults.SessionLogoffTimeout)"; Break}
-						}
-						
-						Switch($GroupDefaults.AllowURLAndMailRedirection)
-						{
-							"Enabled"						{$RDSAllowClientURLMailRedirection = "Enabled"; Break}
-							"Disbaled"						{$RDSAllowClientURLMailRedirection = "Disabled"; Break}
-							"EnabledWithAppRegistration"	{$RDSAllowClientURLMailRedirection = "Enabled (Replace Registered Application)"; Break}
-							Default 						{$RDSAllowClientURLMailRedirection = "Unable to determine Allow CLient URL/Mail Redirection: $($GroupDefaults.AllowURLAndMailRedirection)"; Break}
-						}
-						
-						$RDSSupportShellURLNamespaceObject = $GroupDefaults.SupportShellURLNamespaceObjects.ToString()
-						
-						Switch ($GroupDefaults.DragAndDropMode)
-						{
-							"Bidirectional"		{$RDSDragAndDrop = "Bidirectional"; Break}
-							"Disabled"			{$RDSDragAndDrop = "Disabled"; Break}
-							"ClientToServer"	{$RDSDragAndDrop = "Client to server only"; Break}
-							"ServerToClient"	{$RDSDragAndDrop = "Server to client only"; Break}
-							Default				{$RDSDragAndDrop = "Unable to determine Drag and drop: $($GroupDefaults.DragAndDropMode)"; Break}
-						}
-						
-						If($GroupDefaults.PreferredPAId -eq 0)
-						{
-							$RDSPreferredPublishingAgent = "Automatically"
-						}
-						Else
-						{
-							$RDSPreferredPublishingAgent = (Get-RASPA -Id $GroupDefaults.PreferredPAId -EA 0 4>$Null).Server
-						}
-						$RDSFileTransferMode                   = "Bidirectional"
-						$RDSFileTransferLocation               = "Default download location"
-						$RDSFileTransferChangeLocation         = "False"
-					}
-					Else
-					{
-						#yes we do, get the default settings for the Site
-						#use the Site default settings
-
-						$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
-						
-						If($? -and $Null -ne $RDSDefaults)
-						{
-							$RDSPort        = $RDSDefaults.Port.ToString()
-							$RDSMaxSessions = $RDSDefaults.MaxSessions.ToString()
+							$RDSPort        = $GroupDefaults.Port.ToString()
+							$RDSMaxSessions = $GroupDefaults.MaxSessions.ToString()
 							
-							Switch ($RDSDefaults.SessionTimeout)
+							Switch ($GroupDefaults.SessionTimeout)
 							{
 								0		{$RDSPublishingSessionDisconnectTimeout = "Never"; Break}
 								25		{$RDSPublishingSessionDisconnectTimeout = "25 seconds"; Break}
 								60		{$RDSPublishingSessionDisconnectTimeout = "1 minute"; Break}
 								300		{$RDSPublishingSessionDisconnectTimeout = "5 minutes"; Break}
 								3600	{$RDSPublishingSessionDisconnectTimeout = "1 hour"; Break}
-								Default	{$RDSPublishingSessionDisconnectTimeout = "Unable to determine Publishing Session Disconnect Timeout: $($RDSDefaults.SessionTimeout)"; Break}
+								Default	{$RDSPublishingSessionDisconnectTimeout = "Unable to determine Publishing Session Disconnect Timeout: $($GroupDefaults.SessionTimeout)"; Break}
 							}
 							
-							Switch ($RDSDefaults.SessionLogoffTimeout)
+							Switch ($GroupDefaults.SessionLogoffTimeout)
 							{
 								0		{$RDSPublishingSessionResetTime = "Never"; Break}
 								1		{$RDSPublishingSessionResetTime = "Immediate"; Break}
@@ -5631,79 +5664,166 @@ Function OutputSite
 								60		{$RDSPublishingSessionResetTime = "1 minute"; Break}
 								300		{$RDSPublishingSessionResetTime = "5 minutes"; Break}
 								3600	{$RDSPublishingSessionResetTime = "1 hour"; Break}
-								Default	{$RDSPublishingSessionResetTime = "Unable to determine Publishing Session Reset Timeout: $($RDSDefaults.SessionLogoffTimeout)"; Break}
+								Default	{$RDSPublishingSessionResetTime = "Unable to determine Publishing Session Reset Timeout: $($GroupDefaults.SessionLogoffTimeout)"; Break}
 							}
 							
-							Switch($RDSDefaults.AllowURLAndMailRedirection)
+							Switch($GroupDefaults.AllowURLAndMailRedirection)
 							{
 								"Enabled"						{$RDSAllowClientURLMailRedirection = "Enabled"; Break}
 								"Disbaled"						{$RDSAllowClientURLMailRedirection = "Disabled"; Break}
 								"EnabledWithAppRegistration"	{$RDSAllowClientURLMailRedirection = "Enabled (Replace Registered Application)"; Break}
-								Default 						{$RDSAllowClientURLMailRedirection = "Unable to determine Allow CLient URL/Mail Redirection: $($RDSDefaults.AllowURLAndMailRedirection)"; Break}
+								Default 						{$RDSAllowClientURLMailRedirection = "Unable to determine Allow CLient URL/Mail Redirection: $($GroupDefaults.AllowURLAndMailRedirection)"; Break}
 							}
 							
-							$RDSSupportShellURLNamespaceObject = $RDSDefaults.SupportShellURLNamespaceObjects.ToString()
+							$RDSSupportShellURLNamespaceObject = $GroupDefaults.SupportShellURLNamespaceObjects.ToString()
 							
-							Switch ($RDSDefaults.DragAndDropMode)
+							Switch ($GroupDefaults.DragAndDropMode)
 							{
 								"Bidirectional"		{$RDSDragAndDrop = "Bidirectional"; Break}
 								"Disabled"			{$RDSDragAndDrop = "Disabled"; Break}
 								"ClientToServer"	{$RDSDragAndDrop = "Client to server only"; Break}
 								"ServerToClient"	{$RDSDragAndDrop = "Server to client only"; Break}
-								Default				{$RDSDragAndDrop = "Unable to determine Drag and drop: $($RDSDefaults.DragAndDropMode)"; Break}
+								Default				{$RDSDragAndDrop = "Unable to determine Drag and drop: $($GroupDefaults.DragAndDropMode)"; Break}
 							}
 							
-							Switch ($RDSDefaults.FileTransferMode)
-							{
-								"Bidirectional"		{$RDSFileTransferMode = "Bidirectional"; Break}
-								"Disabled"			{$RDSFileTransferMode = "Disabled"; Break}
-								"ClientToServer"	{$RDSFileTransferMode = "Client to server only"; Break}
-								"ServerToClient"	{$RDSFileTransferMode = "Server to client only"; Break}
-								Default				{$RDSFileTransferMode = "Unable to determine File Transfer mode: $($RDSDefaults.FileTransferMode)"; Break}
-							}
-							If($RDSDefaults.FileTransferLocation -eq "")
-							{
-								$RDSFileTransferLocation = "Default download location"
-							}
-							Else
-							{
-								$RDSFileTransferLocation = $RDSDefaults.FileTransferLocation
-							}
-							$RDSFileTransferChangeLocation = $RDSDefaults.FileTransferLockLocation.ToString()
-
-							If($RDSDefaults.PreferredPAId -eq 0)
+							If($GroupDefaults.PreferredPAId -eq 0)
 							{
 								$RDSPreferredPublishingAgent = "Automatically"
 							}
 							Else
 							{
-								$RDSPreferredPublishingAgent = (Get-RASPA -Id $RDSDefaults.PreferredPAId -EA 0 4>$Null).Server
+								$RDSPreferredPublishingAgent = (Get-RASPA -Id $GroupDefaults.PreferredPAId -EA 0 4>$Null).Server
 							}
-							$RDSAllowRemoteExec             = $RDSDefaults.AllowRemoteExec.ToString()
-							$RDSUseRemoteApps               = $RDSDefaults.UseRemoteApps.ToString()
-							$RDSEnableAppMonitoring         = $RDSDefaults.EnableAppMonitoring.ToString()
-							$RDSAllowFileTransfer           = $RDSDefaults.AllowFileTransfer.ToString()
-							$RDSEnableDriveRedirectionCache = $RDSDefaults.EnableDriveRedirectionCache.ToString()
+
+							Switch ($GroupDefaults.FileTransferMode)
+							{
+								"Bidirectional"		{$RDSFileTransferMode = "Bidirectional"; Break}
+								"Disabled"			{$RDSFileTransferMode = "Disabled"; Break}
+								"ClientToServer"	{$RDSFileTransferMode = "Client to server only"; Break}
+								"ServerToClient"	{$RDSFileTransferMode = "Server to client only"; Break}
+								Default				{$RDSFileTransferMode = "Unable to determine File Transfer mode: $($GroupDefaults.FileTransferMode)"; Break}
+							}
+							If($GroupDefaults.FileTransferLocation -eq "")
+							{
+								$RDSFileTransferLocation = "Default download location"
+							}
+							Else
+							{
+								$RDSFileTransferLocation = $GroupDefaults.FileTransferLocation
+							}
+							$RDSFileTransferChangeLocation = $GroupDefaults.FileTransferLockLocation.ToString()
+
+							#fixed the following missing variables in 2.52 thanks to Thomas Krampe
+							$RDSAllowRemoteExec             = $GroupDefaults.AllowRemoteExec.ToString()
+							$RDSUseRemoteApps               = $GroupDefaults.UseRemoteApps.ToString()
+							$RDSEnableAppMonitoring         = $GroupDefaults.EnableAppMonitoring.ToString()
+							$RDSAllowFileTransfer           = $GroupDefaults.AllowFileTransfer.ToString()
+							$RDSEnableDriveRedirectionCache = $GroupDefaults.EnableDriveRedirectionCache.ToString()
 						}
 						Else
 						{
-							#unable to retrieve default, use built-in default values
-							$RDSPort                               = "3389"
-							$RDSMaxSessions                        = "250"
-							$RDSPublishingSessionDisconnectTimeout = "25 seconds"
-							$RDSPublishingSessionResetTime         = "Immediate"
-							$RDSAllowClientURLMailRedirection      = "Enabled"
-							$RDSSupportShellURLNamespaceObject     = "True"
-							$RDSDragAndDrop                        = "Bidirectional"
-							$RDSFileTransferMode                   = "Bidirectional"
-							$RDSFileTransferLocation               = "Default download location"
-							$RDSFileTransferChangeLocation         = "False"
-							$RDSPreferredPublishingAgent           = "Automatically"
-							$RDSAllowRemoteExec                    = "True"
-							$RDSUseRemoteApps                      = "False"
-							$RDSEnableAppMonitoring                = "True"
-							$RDSAllowFileTransfer                  = "True"
-							$RDSEnableDriveRedirectionCache        = "True"
+							#yes we do, get the default settings for the Site
+							#use the Site default settings
+
+							$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
+							
+							If($? -and $Null -ne $RDSDefaults)
+							{
+								$RDSPort        = $RDSDefaults.Port.ToString()
+								$RDSMaxSessions = $RDSDefaults.MaxSessions.ToString()
+								
+								Switch ($RDSDefaults.SessionTimeout)
+								{
+									0		{$RDSPublishingSessionDisconnectTimeout = "Never"; Break}
+									25		{$RDSPublishingSessionDisconnectTimeout = "25 seconds"; Break}
+									60		{$RDSPublishingSessionDisconnectTimeout = "1 minute"; Break}
+									300		{$RDSPublishingSessionDisconnectTimeout = "5 minutes"; Break}
+									3600	{$RDSPublishingSessionDisconnectTimeout = "1 hour"; Break}
+									Default	{$RDSPublishingSessionDisconnectTimeout = "Unable to determine Publishing Session Disconnect Timeout: $($RDSDefaults.SessionTimeout)"; Break}
+								}
+								
+								Switch ($RDSDefaults.SessionLogoffTimeout)
+								{
+									0		{$RDSPublishingSessionResetTime = "Never"; Break}
+									1		{$RDSPublishingSessionResetTime = "Immediate"; Break}
+									25		{$RDSPublishingSessionResetTime = "25 seconds"; Break}
+									60		{$RDSPublishingSessionResetTime = "1 minute"; Break}
+									300		{$RDSPublishingSessionResetTime = "5 minutes"; Break}
+									3600	{$RDSPublishingSessionResetTime = "1 hour"; Break}
+									Default	{$RDSPublishingSessionResetTime = "Unable to determine Publishing Session Reset Timeout: $($RDSDefaults.SessionLogoffTimeout)"; Break}
+								}
+								
+								Switch($RDSDefaults.AllowURLAndMailRedirection)
+								{
+									"Enabled"						{$RDSAllowClientURLMailRedirection = "Enabled"; Break}
+									"Disbaled"						{$RDSAllowClientURLMailRedirection = "Disabled"; Break}
+									"EnabledWithAppRegistration"	{$RDSAllowClientURLMailRedirection = "Enabled (Replace Registered Application)"; Break}
+									Default 						{$RDSAllowClientURLMailRedirection = "Unable to determine Allow CLient URL/Mail Redirection: $($RDSDefaults.AllowURLAndMailRedirection)"; Break}
+								}
+								
+								$RDSSupportShellURLNamespaceObject = $RDSDefaults.SupportShellURLNamespaceObjects.ToString()
+								
+								Switch ($RDSDefaults.DragAndDropMode)
+								{
+									"Bidirectional"		{$RDSDragAndDrop = "Bidirectional"; Break}
+									"Disabled"			{$RDSDragAndDrop = "Disabled"; Break}
+									"ClientToServer"	{$RDSDragAndDrop = "Client to server only"; Break}
+									"ServerToClient"	{$RDSDragAndDrop = "Server to client only"; Break}
+									Default				{$RDSDragAndDrop = "Unable to determine Drag and drop: $($RDSDefaults.DragAndDropMode)"; Break}
+								}
+								
+								Switch ($RDSDefaults.FileTransferMode)
+								{
+									"Bidirectional"		{$RDSFileTransferMode = "Bidirectional"; Break}
+									"Disabled"			{$RDSFileTransferMode = "Disabled"; Break}
+									"ClientToServer"	{$RDSFileTransferMode = "Client to server only"; Break}
+									"ServerToClient"	{$RDSFileTransferMode = "Server to client only"; Break}
+									Default				{$RDSFileTransferMode = "Unable to determine File Transfer mode: $($RDSDefaults.FileTransferMode)"; Break}
+								}
+								If($RDSDefaults.FileTransferLocation -eq "")
+								{
+									$RDSFileTransferLocation = "Default download location"
+								}
+								Else
+								{
+									$RDSFileTransferLocation = $RDSDefaults.FileTransferLocation
+								}
+								$RDSFileTransferChangeLocation = $RDSDefaults.FileTransferLockLocation.ToString()
+
+								If($RDSDefaults.PreferredPAId -eq 0)
+								{
+									$RDSPreferredPublishingAgent = "Automatically"
+								}
+								Else
+								{
+									$RDSPreferredPublishingAgent = (Get-RASPA -Id $RDSDefaults.PreferredPAId -EA 0 4>$Null).Server
+								}
+								$RDSAllowRemoteExec             = $RDSDefaults.AllowRemoteExec.ToString()
+								$RDSUseRemoteApps               = $RDSDefaults.UseRemoteApps.ToString()
+								$RDSEnableAppMonitoring         = $RDSDefaults.EnableAppMonitoring.ToString()
+								$RDSAllowFileTransfer           = $RDSDefaults.AllowFileTransfer.ToString()
+								$RDSEnableDriveRedirectionCache = $RDSDefaults.EnableDriveRedirectionCache.ToString()
+							}
+							Else
+							{
+								#unable to retrieve default, use built-in default values
+								$RDSPort                               = "3389"
+								$RDSMaxSessions                        = "250"
+								$RDSPublishingSessionDisconnectTimeout = "25 seconds"
+								$RDSPublishingSessionResetTime         = "Immediate"
+								$RDSAllowClientURLMailRedirection      = "Enabled"
+								$RDSSupportShellURLNamespaceObject     = "True"
+								$RDSDragAndDrop                        = "Bidirectional"
+								$RDSFileTransferMode                   = "Bidirectional"
+								$RDSFileTransferLocation               = "Default download location"
+								$RDSFileTransferChangeLocation         = "False"
+								$RDSPreferredPublishingAgent           = "Automatically"
+								$RDSAllowRemoteExec                    = "True"
+								$RDSUseRemoteApps                      = "False"
+								$RDSEnableAppMonitoring                = "True"
+								$RDSAllowFileTransfer                  = "True"
+								$RDSEnableDriveRedirectionCache        = "True"
+							}
 						}
 					}
 				}
@@ -5977,328 +6097,52 @@ Function OutputSite
 				#do we inherit group or site defaults?
 				#is this RDS host in a group?
 				$Results = Get-RASRDSGroup -SiteId $Site.Id -EA 0 4>$Null
-				If( $Results.RDSIds -Contains $RDSHost.Id )
+				
+				If($? -and $Null -ne $Results)
 				{
-					#does this group inherit default settings?
-					If($Results.InheritDefaultUserProfileSettings -eq $False)
+					If($Results.RDSIds -Contains $RDSHost.Id )
 					{
-						#no we don't, so get the default settings for the group
-						$GroupDefaults = $Results.RDSDefSettings
+						#does this group inherit default settings?
+						If($Results.InheritDefaultUserProfileSettings -eq $False)
+						{
+							#no we don't, so get the default settings for the group
+							$GroupDefaults = $Results.RDSDefSettings
 
-						Switch ($GroupDefaults.UPDMode)
-						{
-							"DoNotChange"	{$RDSUPDState = "Do not change"; Break}
-							"Enabled"		{$RDSUPDState = "Enabled"; Break}
-							"Disabled"		{$RDSUPDState = "Disabled"; Break}
-							Default			{$RDSUPDState = "Unable to determine Current UPD State: $($GroupDefaults.UPDMode)"; Break}
-						}
-						
-						Switch ($GroupDefaults.Technology)
-						{
-							"DoNotManage"				{$RDSTechnology = "Do not manage by RAS"; Break}
-							"UPD"						{$RDSTechnology = "User profile disk"; Break}
-							"FSLogixProfileContainer"	{$RDSTechnology = "FSLogix"; Break}
-							Default						{$RDSTechnology = "Unable to determine Technology State: $($GroupDefaults.Technology)"; Break}
-						}
-						
-						$RDSUPDLocation = $GroupDefaults.DiskPath
-						$RDSUPDSize     = $GroupDefaults.MaxUserProfileDiskSizeGB.ToString()
-
-						Switch ($GroupDefaults.RoamingMode)
-						{
-							"Exclude"	{$RDSUPDRoamingMode = "Exclude"; Break}
-							"Include"	{$RDSUPDRoamingMode = "Include"; Break}
-							Default		{$RDSUPDRoamingMode = "Unable to determine UPD Roaming Mode: $($GroupDefaults.RoamingMode)"; Break}
-						}
-						
-						If($RDSUPDRoamingMode -eq "Exclude")
-						{
-							$RDSUPDExcludeFilePath   = $GroupDefaults.ExcludeFilePath
-							$RDSUPDExcludeFolderPath = $GroupDefaults.ExcludeFolderPath
-						}
-						ElseIf($RDSUPDRoamingMode -eq "Include")
-						{
-							$RDSUPDIncludeFilePath   = $GroupDefaults.IncludeFilePath
-							$RDSUPDIncludeFolderPath = $GroupDefaults.IncludeFolderPath
-						}
-						Else
-						{
-							$RDSUPDExcludeFilePath   = {"Unable to determine UPD Roaming Mode"}
-							$RDSUPDExcludeFolderPath = {"Unable to determine UPD Roaming Mode"}
-							$RDSUPDIncludeFilePath   = {"Unable to determine UPD Roaming Mode"}
-							$RDSUPDIncludeFolderPath = {"Unable to determine UPD Roaming Mode"}
-						}
-						
-						$FSLogixSettings           = $GroupDefaults.FSLogix.ProfileContainer
-						$FSLogixDeploymentSettings = Get-RASFSLogixSettings -EA 0 4>$Null | Where-Object{ $_.SiteId -eq $Site.Id}
-						
-						Switch($FSLogixDeploymentSettings.InstallType)
-						{
-							"Manually"		{$FSLogixDeploymentSettingsDeploymentMethod = "Install manually"; Break}
-							"Online"		{$FSLogixDeploymentSettingsDeploymentMethod = "Install online"; Break}
-							"NetworkDrive"	{$FSLogixDeploymentSettingsDeploymentMethod = "Install from a network share"; Break}
-							"UploadInstall"	{$FSLogixDeploymentSettingsDeploymentMethod = "Push from RAS Publishing Agent"; Break}
-							Default			{$FSLogixDeploymentSettingsDeploymentMethod = "Unable to determine FSLogix Deployment method: $($FSLogixDeploymentSettings.InstallType)"; Break}
-						}
-						
-						$FSLogixDeploymentSettingsInstallOnlineURL  = $FSLogixDeploymentSettings.InstallOnlineURL
-						$FSLogixDeploymentSettingsNetworkDrivePath  = $FSLogixDeploymentSettings.NetworkDrivePath
-						$FSLogixDeploymentSettingsInstallerFileName = $FSLogixDeploymentSettings.InstallerFileName
-						$FSLogixDeploymentSettingsReplicate         = $FSLogixDeploymentSettings.Replicate
-						
-						Switch ($FSLogixSettings.LocationType)
-						{
-							"SMBLocation"	
-							{
-								$FSLogixLocationType = "SMB Location"
-								$FSLogixLocationOfProfileDisks = $FSLogixSettings.VHDLocations
-								Break
-							}
-							"CloudCache"	
-							{
-								$FSLogixLocationType = "Cloud Cache"
-								$FSLogixLocationOfProfileDisks = $FSLogixSettings.CCDLocations
-								Break
-							}
-							Default 		
-							{
-								$FSLogixLocationType = "Unable to determine FSLogix Location type: $($FSLogixSettings.LocationType)"
-								$FSLogixLocationOfProfileDisks = @()
-								Break
-							}
-						}
-						
-						Switch ($FSLogixSettings.ProfileDiskFormat)
-						{
-							"VHD"	{$FSLogixProfileDiskFormat = "VHD"; Break}
-							"VHDX"	{$FSLogixProfileDiskFormat = "VHDX"; Break}
-							Default	{$FSLogixProfileDiskFormat = "Unable to determine FSLogix Profile disk format: $($FSLogixSettings.ProfileDiskFormat)"; Break}
-						}
-						
-						Switch ($FSLogixSettings.AllocationType)
-						{
-							"Dynamic"	{$FSLogixAllocationType = "Dynamic"; Break}
-							"Full"		{$FSLogixAllocationType = "Full"; Break}
-							Default		{$FSLogixAllocationType = "Unable to determine FSLogix Allocation type: $($FSLogixSettings.AllocationType)"; Break}
-						}
-						
-						$FSLogixDefaultSize = $FSLogixSettings.DefaultSize.ToString()
-						
-						#FSLogix Additional settings
-						#Users and Groups tab
-						If($FSLogixSettings.UserInclusionList.Count -eq 0)
-						{
-							$FSLogixSettingsUserInclusionList = @("Everyone")
-						}
-						Else
-						{
-							$FSLogixSettingsUserInclusionList = $FSLogixSettings.UserInclusionList
-						}
-						$FSLogixSettingsUserExclusionList       = $FSLogixSettings.UserExclusionList
-						
-						#Folders tab
-						$FSLogixSettingsCustomizeProfileFolders = $FSLogixSettings.CustomizeProfileFolders
-						$FSLogixSettingsExcludeCommonFolders    = $FSLogixSettings | Select-Object -ExpandProperty ExcludeCommonFolders
-						$ExcludedCommonFolders                  = @()
-						$FSLogixSettingsFolderInclusionList     = $FSLogixSettings.FolderInclusionList
-						$FSLogixSettingsFolderExclusionList     = $FSLogixSettings.FolderExclusionList
-
-						If($FSLogixSettingsCustomizeProfileFolders)
-						{
-							#this is cumulative
-							#Contacts, Desktop, Documents, Links, MusicPodcasts, PicturesVideos, FoldersLowIntegProcesses
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Contacts)
-							{
-								$ExcludedCommonFolders += "Contacts"
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Desktop)
-							{
-								$ExcludedCommonFolders += "Desktop"
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Documents)
-							{
-								$ExcludedCommonFolders += "Documents"
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Links)
-							{
-								$ExcludedCommonFolders += "Links"
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::MusicPodcasts)
-							{
-								$ExcludedCommonFolders += 'Music & Podcasts'
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::PicturesVideos)
-							{
-								$ExcludedCommonFolders += 'Pictures & Videos'
-							}
-							If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::FoldersLowIntegProcesses)
-							{
-								$ExcludedCommonFolders += "Folders used by Low Integrity processes"
-							}
-						}
-						
-						#Advanced tab
-						$FSLogixAS = $FSLogixSettings.AdvancedSettings
-						
-						Switch($FSLogixAS.AccessNetworkAsComputerObject)
-						{
-							"Enable"	{$FSLogixAS_AccessNetworkAsComputerObject = "Enable"; Break}
-							"Disable"	{$FSLogixAS_AccessNetworkAsComputerObject = "Disable"; Break}
-							Default		{$FSLogixAS_AccessNetworkAsComputerObject = "Unknown: $($FSLogixAS.AccessNetworkAsComputerObject)"; Break}
-						}
-						
-						$FSLogixAS_AttachVHDSDDL = $FSLogixAS.AttachVHDSDDL
-						
-						Switch($FSLogixAS.DeleteLocalProfileWhenVHDShouldApply)
-						{
-							"Enable"	{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Enable"; Break}
-							"Disable"	{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Disable"; Break}
-							Default		{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Unknown: $($FSLogixAS.DeleteLocalProfileWhenVHDShouldApply)"; Break}
-						}
-
-						$FSLogixAS_DiffDiskParentFolderPath = $FSLogixAS.DiffDiskParentFolderPath  
-
-						Switch($FSLogixAS.FlipFlopProfileDirectoryName)
-						{
-							"Enable"	{$FSLogixAS_FlipFlopProfileDirectoryName = "Enable"; Break}
-							"Disable"	{$FSLogixAS_FlipFlopProfileDirectoryName = "Disable"; Break}
-							Default		{$FSLogixAS_FlipFlopProfileDirectoryName = "Unknown: $($FSLogixAS.FlipFlopProfileDirectoryName)"; Break}
-						}
-						
-						Switch($FSLogixAS.KeepLocalDir)
-						{
-							"Enable"	{$FSLogixAS_KeepLocalDir = "Enable"; Break}
-							"Disable"	{$FSLogixAS_KeepLocalDir = "Disable"; Break}
-							Default		{$FSLogixAS_KeepLocalDir = "Unknown: $($FSLogixAS.KeepLocalDir)"; Break}
-						}
-
-						$FSLogixAS_LockedRetryCount    = $FSLogixAS.LockedRetryCount                       
-						$FSLogixAS_LockedRetryInterval = $FSLogixAS.LockedRetryInterval     
-						
-						Switch($FSLogixAS.NoProfileContainingFolder)
-						{
-							"Enable"	{$FSLogixAS_NoProfileContainingFolder = "Enable"; Break}
-							"Disable"	{$FSLogixAS_NoProfileContainingFolder = "Disable"; Break}
-							Default		{$FSLogixAS_NoProfileContainingFolder = "Unknown: $($FSLogixAS.NoProfileContainingFolder)"; Break}
-						}
-
-						Switch($FSLogixAS.OutlookCachedMode)
-						{
-							"Enable"	{$FSLogixAS_OutlookCachedMode = "Enable"; Break}
-							"Disable"	{$FSLogixAS_OutlookCachedMode = "Disable"; Break}
-							Default		{$FSLogixAS_OutlookCachedMode = "Unknown: $($FSLogixAS.OutlookCachedMode)"; Break}
-						}
-
-						Switch($FSLogixAS.PreventLoginWithFailure)
-						{
-							"Enable"	{$FSLogixAS_PreventLoginWithFailure = "Enable"; Break}
-							"Disable"	{$FSLogixAS_PreventLoginWithFailure = "Disable"; Break}
-							Default		{$FSLogixAS_PreventLoginWithFailure = "Unknown: $($FSLogixAS.PreventLoginWithFailure)"; Break}
-						}
-
-						Switch($FSLogixAS.PreventLoginWithTempProfile)
-						{
-							"Enable"	{$FSLogixAS_PreventLoginWithTempProfile = "Enable"; Break}
-							"Disable"	{$FSLogixAS_PreventLoginWithTempProfile = "Disable"; Break}
-							Default		{$FSLogixAS_PreventLoginWithTempProfile = "Unknown: $($FSLogixAS.PreventLoginWithTempProfile)"; Break}
-						}
-
-						$FSLogixAS_ProfileDirSDDL = $FSLogixAS.ProfileDirSDDL
-
-						Switch($FSLogixAS.ProfileType)
-						{
-							"NormalProfile"	{$FSLogixAS_ProfileType = "Normal profile"; Break}
-							"OnlyRWProfile"	{$FSLogixAS_ProfileType = "Only RW profile"; Break}
-							"OnlyROProfile"	{$FSLogixAS_ProfileType = "Only RO profile"; Break}
-							"RWROProfile"	{$FSLogixAS_ProfileType = "RW/RO profile"; Break}
-							Default		{$FSLogixAS_ProfileType = "Unknown: $($FSLogixAS.ProfileType)"; Break}
-						}
-
-						$FSLogixAS_ReAttachIntervalSeconds = $FSLogixAS.ReAttachIntervalSeconds                
-						$FSLogixAS_ReAttachRetryCount      = $FSLogixAS.ReAttachRetryCount                     
-
-						Switch($FSLogixAS.RemoveOrphanedOSTFilesOnLogoff)
-						{
-							"Enable"	{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Enable"; Break}
-							"Disable"	{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Disable"; Break}
-							Default		{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Unknown: $($FSLogixAS.RemoveOrphanedOSTFilesOnLogoff)"; Break}
-						}
-
-						Switch($FSLogixAS.RoamSearch)
-						{
-							"Enable"	{$FSLogixAS_RoamSearch = "Enable"; Break}
-							"Disable"	{$FSLogixAS_RoamSearch = "Disable"; Break}
-							Default		{$FSLogixAS_RoamSearch = "Unknown: $($FSLogixAS.RoamSearch)"; Break}
-						}
-
-						Switch($FSLogixAS.SetTempToLocalPath)
-						{
-							"TakeNoAction"					{$FSLogixAS_SetTempToLocalPath = "Take no action"; Break}
-							"RedirectTempAndTmp"			{$FSLogixAS_SetTempToLocalPath = "Redirect TEMP and TMP"; Break}
-							"RedirectINetCache"				{$FSLogixAS_SetTempToLocalPath = "Redirect INetCache"; Break}
-							"RedirectTempTmpAndINetCache"	{$FSLogixAS_SetTempToLocalPath = "Redirect TEMP, TMP, and INetCache"; Break}
-							Default							{$FSLogixAS_SetTempToLocalPath = "Unknown: $($FSLogixAS.SetTempToLocalPath)"; Break}
-						}
-
-						$FSLogixAS_SIDDirNameMatch   = $FSLogixAS.SIDDirNameMatch                        
-						$FSLogixAS_SIDDirNamePattern = $FSLogixAS.SIDDirNamePattern                      
-						$FSLogixAS_SIDDirSDDL        = $FSLogixAS.SIDDirSDDL
-						$FSLogixAS_VHDNameMatch      = $FSLogixAS.VHDNameMatch                           
-						$FSLogixAS_VHDNamePattern    = $FSLogixAS.VHDNamePattern                         
-
-						Switch($FSLogixAS.VHDXSectorSize)
-						{
-							0		{$FSLogixAS_VHDXSectorSize = "System default"; Break}
-							512		{$FSLogixAS_VHDXSectorSize = "512"; Break}
-							4096	{$FSLogixAS_VHDXSectorSize = "4096"; Break}
-							Default	{$FSLogixAS_VHDXSectorSize = "Unknown: $($FSLogixAS.VHDXSectorSize)"; Break}
-						}
-
-						$FSLogixAS_VolumeWaitTimeMS = $FSLogixAS.VolumeWaitTimeMS                       					
-					}
-					Else
-					{
-						#yes we do, get the default settings for the Site
-						#use the Site default settings
-						$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
-						
-						If($? -and $Null -ne $RDSDefaults)
-						{
-							Switch ($RDSDefaults.UPDMode)
+							Switch ($GroupDefaults.UPDMode)
 							{
 								"DoNotChange"	{$RDSUPDState = "Do not change"; Break}
 								"Enabled"		{$RDSUPDState = "Enabled"; Break}
 								"Disabled"		{$RDSUPDState = "Disabled"; Break}
-								Default			{$RDSUPDState = "Unable to determine Current UPD State: $($RDSDefaults.UPDMode)"; Break}
+								Default			{$RDSUPDState = "Unable to determine Current UPD State: $($GroupDefaults.UPDMode)"; Break}
 							}
 							
-							Switch ($RDSDefaults.Technology)
+							Switch ($GroupDefaults.Technology)
 							{
 								"DoNotManage"				{$RDSTechnology = "Do not manage by RAS"; Break}
 								"UPD"						{$RDSTechnology = "User profile disk"; Break}
 								"FSLogixProfileContainer"	{$RDSTechnology = "FSLogix"; Break}
-								Default						{$RDSTechnology = "Unable to determine Technology State: $($RDSDefaults.Technology)"; Break}
+								Default						{$RDSTechnology = "Unable to determine Technology State: $($GroupDefaults.Technology)"; Break}
 							}
 							
-							$RDSUPDLocation = $RDSDefaults.DiskPath
-							$RDSUPDSize     = $RDSDefaults.MaxUserProfileDiskSizeGB.ToString()
+							$RDSUPDLocation = $GroupDefaults.DiskPath
+							$RDSUPDSize     = $GroupDefaults.MaxUserProfileDiskSizeGB.ToString()
 
-							Switch ($RDSDefaults.RoamingMode)
+							Switch ($GroupDefaults.RoamingMode)
 							{
 								"Exclude"	{$RDSUPDRoamingMode = "Exclude"; Break}
 								"Include"	{$RDSUPDRoamingMode = "Include"; Break}
-								Default		{$RDSUPDRoamingMode = "Unable to determine UPD Roaming Mode: $($RDSDefaults.RoamingMode)"; Break}
+								Default		{$RDSUPDRoamingMode = "Unable to determine UPD Roaming Mode: $($GroupDefaults.RoamingMode)"; Break}
 							}
 							
 							If($RDSUPDRoamingMode -eq "Exclude")
 							{
-								$RDSUPDExcludeFilePath   = $RDSDefaults.ExcludeFilePath
-								$RDSUPDExcludeFolderPath = $RDSDefaults.ExcludeFolderPath
+								$RDSUPDExcludeFilePath   = $GroupDefaults.ExcludeFilePath
+								$RDSUPDExcludeFolderPath = $GroupDefaults.ExcludeFolderPath
 							}
 							ElseIf($RDSUPDRoamingMode -eq "Include")
 							{
-								$RDSUPDIncludeFilePath   = $RDSDefaults.IncludeFilePath
-								$RDSUPDIncludeFolderPath = $RDSDefaults.IncludeFolderPath
+								$RDSUPDIncludeFilePath   = $GroupDefaults.IncludeFilePath
+								$RDSUPDIncludeFolderPath = $GroupDefaults.IncludeFolderPath
 							}
 							Else
 							{
@@ -6307,8 +6151,8 @@ Function OutputSite
 								$RDSUPDIncludeFilePath   = {"Unable to determine UPD Roaming Mode"}
 								$RDSUPDIncludeFolderPath = {"Unable to determine UPD Roaming Mode"}
 							}
-						
-							$FSLogixSettings           = $RDSDefaults.FSLogix.ProfileContainer
+							
+							$FSLogixSettings           = $GroupDefaults.FSLogix.ProfileContainer
 							$FSLogixDeploymentSettings = Get-RASFSLogixSettings -EA 0 4>$Null | Where-Object{ $_.SiteId -eq $Site.Id}
 							
 							Switch($FSLogixDeploymentSettings.InstallType)
@@ -6362,7 +6206,7 @@ Function OutputSite
 							}
 							
 							$FSLogixDefaultSize = $FSLogixSettings.DefaultSize.ToString()
-						
+							
 							#FSLogix Additional settings
 							#Users and Groups tab
 							If($FSLogixSettings.UserInclusionList.Count -eq 0)
@@ -6374,7 +6218,7 @@ Function OutputSite
 								$FSLogixSettingsUserInclusionList = $FSLogixSettings.UserInclusionList
 							}
 							$FSLogixSettingsUserExclusionList       = $FSLogixSettings.UserExclusionList
-						
+							
 							#Folders tab
 							$FSLogixSettingsCustomizeProfileFolders = $FSLogixSettings.CustomizeProfileFolders
 							$FSLogixSettingsExcludeCommonFolders    = $FSLogixSettings | Select-Object -ExpandProperty ExcludeCommonFolders
@@ -6384,10 +6228,6 @@ Function OutputSite
 
 							If($FSLogixSettingsCustomizeProfileFolders)
 							{
-								#####################################################################################
-								#MANY thanks to Guy Leech for helping me figure out how to process and use this Enum#
-								#####################################################################################
-
 								#this is cumulative
 								#Contacts, Desktop, Documents, Links, MusicPodcasts, PicturesVideos, FoldersLowIntegProcesses
 								If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Contacts)
@@ -6419,7 +6259,7 @@ Function OutputSite
 									$ExcludedCommonFolders += "Folders used by Low Integrity processes"
 								}
 							}
-						
+							
 							#Advanced tab
 							$FSLogixAS = $FSLogixSettings.AdvancedSettings
 							
@@ -6541,59 +6381,343 @@ Function OutputSite
 						}
 						Else
 						{
-							#unable to retrieve default, use built-in default values
-							$RDSUPDState                                    = "Do not change"
-							$RDSUPDLocation                                 = "None"
-							$RDSUPDSize                                     = "20"
-							$RDSTechnology                                  = "Do not manage by RAS"
-							$RDSUPDRoamingMode                              = "Exclude"
-							$RDSUPDExcludeFilePath                          = @()
-							$RDSUPDExcludeFolderPath                        = @()
-							$RDSUPDIncludeFilePath                          = @()
-							$RDSUPDIncludeFolderPath                        = @()
-							$FSLogixDeploymentSettingsDeploymentMethod      = "None"
-							$FSLogixDeploymentSettingsInstallOnlineURL      = "None"
-							$FSLogixDeploymentSettingsNetworkDrivePath      = "None"
-							$FSLogixDeploymentSettingsInstallerFileName     = "None"
-							$FSLogixDeploymentSettingsReplicate             = $False
-							$FSLogixLocationType                            = "None"
-							$FSLogixLocationOfProfileDisks                  = @()
-							$FSLogixProfileDiskFormat                       = "None"
-							$FSLogixAllocationType                          = "None"
-							$FSLogixDefaultSize                             = "0"
-							$FSLogixSettingsUserInclusionList               = @("Everyone")
-							$FSLogixSettingsUserExclusionList               = @()
-							$FSLogixSettingsCustomizeProfileFolders         = $False
-							$FSLogixSettingsExcludeCommonFolders            = "None"
-							$ExcludedCommonFolders                          = @()
-							$FSLogixSettingsFolderInclusionList             = @()
-							$FSLogixSettingsFolderExclusionList             = @()
-							$FSLogixAS_AccessNetworkAsComputerObject        = "Disable"
-							$FSLogixAS_AttachVHDSDDL                        = "None"
-							$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Disable"
-							$FSLogixAS_DiffDiskParentFolderPath             = "%TEMP"
-							$FSLogixAS_FlipFlopProfileDirectoryName         = "Disable"
-							$FSLogixAS_KeepLocalDir                         = "Disable"
-							$FSLogixAS_LockedRetryCount                     = 12
-							$FSLogixAS_LockedRetryInterval                  = 5
-							$FSLogixAS_NoProfileContainingFolder            = "Disable"
-							$FSLogixAS_OutlookCachedMode                    = "Disable"
-							$FSLogixAS_PreventLoginWithFailure              = "Disable"
-							$FSLogixAS_PreventLoginWithTempProfile          = "Disable"
-							$FSLogixAS_ProfileDirSDDL                       = "None"
-							$FSLogixAS_ProfileType                          = "Normal profile"
-							$FSLogixAS_ReAttachIntervalSeconds              = 10
-							$FSLogixAS_ReAttachRetryCount                   = 60
-							$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff       = "Enable"
-							$FSLogixAS_RoamSearch                           = "Disable"
-							$FSLogixAS_SetTempToLocalPath                   = "Redirect TEMP, TMP, and INetCache"
-							$FSLogixAS_SIDDirNameMatch                      = "%sid%_%username%"
-							$FSLogixAS_SIDDirNamePattern                    = "%sid%_%username%"
-							$FSLogixAS_SIDDirSDDL                           = "None"
-							$FSLogixAS_VHDNameMatch                         = "Profile*"
-							$FSLogixAS_VHDNamePattern                       = "Profile_%username%"
-							$FSLogixAS_VHDXSectorSize                       = "System default"
-							$FSLogixAS_VolumeWaitTimeMS                     = 20000
+							#yes we do, get the default settings for the Site
+							#use the Site default settings
+							$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
+							
+							If($? -and $Null -ne $RDSDefaults)
+							{
+								Switch ($RDSDefaults.UPDMode)
+								{
+									"DoNotChange"	{$RDSUPDState = "Do not change"; Break}
+									"Enabled"		{$RDSUPDState = "Enabled"; Break}
+									"Disabled"		{$RDSUPDState = "Disabled"; Break}
+									Default			{$RDSUPDState = "Unable to determine Current UPD State: $($RDSDefaults.UPDMode)"; Break}
+								}
+								
+								Switch ($RDSDefaults.Technology)
+								{
+									"DoNotManage"				{$RDSTechnology = "Do not manage by RAS"; Break}
+									"UPD"						{$RDSTechnology = "User profile disk"; Break}
+									"FSLogixProfileContainer"	{$RDSTechnology = "FSLogix"; Break}
+									Default						{$RDSTechnology = "Unable to determine Technology State: $($RDSDefaults.Technology)"; Break}
+								}
+								
+								$RDSUPDLocation = $RDSDefaults.DiskPath
+								$RDSUPDSize     = $RDSDefaults.MaxUserProfileDiskSizeGB.ToString()
+
+								Switch ($RDSDefaults.RoamingMode)
+								{
+									"Exclude"	{$RDSUPDRoamingMode = "Exclude"; Break}
+									"Include"	{$RDSUPDRoamingMode = "Include"; Break}
+									Default		{$RDSUPDRoamingMode = "Unable to determine UPD Roaming Mode: $($RDSDefaults.RoamingMode)"; Break}
+								}
+								
+								If($RDSUPDRoamingMode -eq "Exclude")
+								{
+									$RDSUPDExcludeFilePath   = $RDSDefaults.ExcludeFilePath
+									$RDSUPDExcludeFolderPath = $RDSDefaults.ExcludeFolderPath
+								}
+								ElseIf($RDSUPDRoamingMode -eq "Include")
+								{
+									$RDSUPDIncludeFilePath   = $RDSDefaults.IncludeFilePath
+									$RDSUPDIncludeFolderPath = $RDSDefaults.IncludeFolderPath
+								}
+								Else
+								{
+									$RDSUPDExcludeFilePath   = {"Unable to determine UPD Roaming Mode"}
+									$RDSUPDExcludeFolderPath = {"Unable to determine UPD Roaming Mode"}
+									$RDSUPDIncludeFilePath   = {"Unable to determine UPD Roaming Mode"}
+									$RDSUPDIncludeFolderPath = {"Unable to determine UPD Roaming Mode"}
+								}
+							
+								$FSLogixSettings           = $RDSDefaults.FSLogix.ProfileContainer
+								$FSLogixDeploymentSettings = Get-RASFSLogixSettings -EA 0 4>$Null | Where-Object{ $_.SiteId -eq $Site.Id}
+								
+								Switch($FSLogixDeploymentSettings.InstallType)
+								{
+									"Manually"		{$FSLogixDeploymentSettingsDeploymentMethod = "Install manually"; Break}
+									"Online"		{$FSLogixDeploymentSettingsDeploymentMethod = "Install online"; Break}
+									"NetworkDrive"	{$FSLogixDeploymentSettingsDeploymentMethod = "Install from a network share"; Break}
+									"UploadInstall"	{$FSLogixDeploymentSettingsDeploymentMethod = "Push from RAS Publishing Agent"; Break}
+									Default			{$FSLogixDeploymentSettingsDeploymentMethod = "Unable to determine FSLogix Deployment method: $($FSLogixDeploymentSettings.InstallType)"; Break}
+								}
+								
+								$FSLogixDeploymentSettingsInstallOnlineURL  = $FSLogixDeploymentSettings.InstallOnlineURL
+								$FSLogixDeploymentSettingsNetworkDrivePath  = $FSLogixDeploymentSettings.NetworkDrivePath
+								$FSLogixDeploymentSettingsInstallerFileName = $FSLogixDeploymentSettings.InstallerFileName
+								$FSLogixDeploymentSettingsReplicate         = $FSLogixDeploymentSettings.Replicate
+								
+								Switch ($FSLogixSettings.LocationType)
+								{
+									"SMBLocation"	
+									{
+										$FSLogixLocationType = "SMB Location"
+										$FSLogixLocationOfProfileDisks = $FSLogixSettings.VHDLocations
+										Break
+									}
+									"CloudCache"	
+									{
+										$FSLogixLocationType = "Cloud Cache"
+										$FSLogixLocationOfProfileDisks = $FSLogixSettings.CCDLocations
+										Break
+									}
+									Default 		
+									{
+										$FSLogixLocationType = "Unable to determine FSLogix Location type: $($FSLogixSettings.LocationType)"
+										$FSLogixLocationOfProfileDisks = @()
+										Break
+									}
+								}
+								
+								Switch ($FSLogixSettings.ProfileDiskFormat)
+								{
+									"VHD"	{$FSLogixProfileDiskFormat = "VHD"; Break}
+									"VHDX"	{$FSLogixProfileDiskFormat = "VHDX"; Break}
+									Default	{$FSLogixProfileDiskFormat = "Unable to determine FSLogix Profile disk format: $($FSLogixSettings.ProfileDiskFormat)"; Break}
+								}
+								
+								Switch ($FSLogixSettings.AllocationType)
+								{
+									"Dynamic"	{$FSLogixAllocationType = "Dynamic"; Break}
+									"Full"		{$FSLogixAllocationType = "Full"; Break}
+									Default		{$FSLogixAllocationType = "Unable to determine FSLogix Allocation type: $($FSLogixSettings.AllocationType)"; Break}
+								}
+								
+								$FSLogixDefaultSize = $FSLogixSettings.DefaultSize.ToString()
+							
+								#FSLogix Additional settings
+								#Users and Groups tab
+								If($FSLogixSettings.UserInclusionList.Count -eq 0)
+								{
+									$FSLogixSettingsUserInclusionList = @("Everyone")
+								}
+								Else
+								{
+									$FSLogixSettingsUserInclusionList = $FSLogixSettings.UserInclusionList
+								}
+								$FSLogixSettingsUserExclusionList       = $FSLogixSettings.UserExclusionList
+							
+								#Folders tab
+								$FSLogixSettingsCustomizeProfileFolders = $FSLogixSettings.CustomizeProfileFolders
+								$FSLogixSettingsExcludeCommonFolders    = $FSLogixSettings | Select-Object -ExpandProperty ExcludeCommonFolders
+								$ExcludedCommonFolders                  = @()
+								$FSLogixSettingsFolderInclusionList     = $FSLogixSettings.FolderInclusionList
+								$FSLogixSettingsFolderExclusionList     = $FSLogixSettings.FolderExclusionList
+
+								If($FSLogixSettingsCustomizeProfileFolders)
+								{
+									#####################################################################################
+									#MANY thanks to Guy Leech for helping me figure out how to process and use this Enum#
+									#####################################################################################
+
+									#this is cumulative
+									#Contacts, Desktop, Documents, Links, MusicPodcasts, PicturesVideos, FoldersLowIntegProcesses
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Contacts)
+									{
+										$ExcludedCommonFolders += "Contacts"
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Desktop)
+									{
+										$ExcludedCommonFolders += "Desktop"
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Documents)
+									{
+										$ExcludedCommonFolders += "Documents"
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::Links)
+									{
+										$ExcludedCommonFolders += "Links"
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::MusicPodcasts)
+									{
+										$ExcludedCommonFolders += 'Music & Podcasts'
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::PicturesVideos)
+									{
+										$ExcludedCommonFolders += 'Pictures & Videos'
+									}
+									If($FSLogixSettingsExcludeCommonFolders -band [RASAdminEngine.Core.OutputModels.UserProfile.FSLogix.ExcludeCommonFolders]::FoldersLowIntegProcesses)
+									{
+										$ExcludedCommonFolders += "Folders used by Low Integrity processes"
+									}
+								}
+							
+								#Advanced tab
+								$FSLogixAS = $FSLogixSettings.AdvancedSettings
+								
+								Switch($FSLogixAS.AccessNetworkAsComputerObject)
+								{
+									"Enable"	{$FSLogixAS_AccessNetworkAsComputerObject = "Enable"; Break}
+									"Disable"	{$FSLogixAS_AccessNetworkAsComputerObject = "Disable"; Break}
+									Default		{$FSLogixAS_AccessNetworkAsComputerObject = "Unknown: $($FSLogixAS.AccessNetworkAsComputerObject)"; Break}
+								}
+								
+								$FSLogixAS_AttachVHDSDDL = $FSLogixAS.AttachVHDSDDL
+								
+								Switch($FSLogixAS.DeleteLocalProfileWhenVHDShouldApply)
+								{
+									"Enable"	{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Enable"; Break}
+									"Disable"	{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Disable"; Break}
+									Default		{$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Unknown: $($FSLogixAS.DeleteLocalProfileWhenVHDShouldApply)"; Break}
+								}
+
+								$FSLogixAS_DiffDiskParentFolderPath = $FSLogixAS.DiffDiskParentFolderPath  
+
+								Switch($FSLogixAS.FlipFlopProfileDirectoryName)
+								{
+									"Enable"	{$FSLogixAS_FlipFlopProfileDirectoryName = "Enable"; Break}
+									"Disable"	{$FSLogixAS_FlipFlopProfileDirectoryName = "Disable"; Break}
+									Default		{$FSLogixAS_FlipFlopProfileDirectoryName = "Unknown: $($FSLogixAS.FlipFlopProfileDirectoryName)"; Break}
+								}
+								
+								Switch($FSLogixAS.KeepLocalDir)
+								{
+									"Enable"	{$FSLogixAS_KeepLocalDir = "Enable"; Break}
+									"Disable"	{$FSLogixAS_KeepLocalDir = "Disable"; Break}
+									Default		{$FSLogixAS_KeepLocalDir = "Unknown: $($FSLogixAS.KeepLocalDir)"; Break}
+								}
+
+								$FSLogixAS_LockedRetryCount    = $FSLogixAS.LockedRetryCount                       
+								$FSLogixAS_LockedRetryInterval = $FSLogixAS.LockedRetryInterval     
+								
+								Switch($FSLogixAS.NoProfileContainingFolder)
+								{
+									"Enable"	{$FSLogixAS_NoProfileContainingFolder = "Enable"; Break}
+									"Disable"	{$FSLogixAS_NoProfileContainingFolder = "Disable"; Break}
+									Default		{$FSLogixAS_NoProfileContainingFolder = "Unknown: $($FSLogixAS.NoProfileContainingFolder)"; Break}
+								}
+
+								Switch($FSLogixAS.OutlookCachedMode)
+								{
+									"Enable"	{$FSLogixAS_OutlookCachedMode = "Enable"; Break}
+									"Disable"	{$FSLogixAS_OutlookCachedMode = "Disable"; Break}
+									Default		{$FSLogixAS_OutlookCachedMode = "Unknown: $($FSLogixAS.OutlookCachedMode)"; Break}
+								}
+
+								Switch($FSLogixAS.PreventLoginWithFailure)
+								{
+									"Enable"	{$FSLogixAS_PreventLoginWithFailure = "Enable"; Break}
+									"Disable"	{$FSLogixAS_PreventLoginWithFailure = "Disable"; Break}
+									Default		{$FSLogixAS_PreventLoginWithFailure = "Unknown: $($FSLogixAS.PreventLoginWithFailure)"; Break}
+								}
+
+								Switch($FSLogixAS.PreventLoginWithTempProfile)
+								{
+									"Enable"	{$FSLogixAS_PreventLoginWithTempProfile = "Enable"; Break}
+									"Disable"	{$FSLogixAS_PreventLoginWithTempProfile = "Disable"; Break}
+									Default		{$FSLogixAS_PreventLoginWithTempProfile = "Unknown: $($FSLogixAS.PreventLoginWithTempProfile)"; Break}
+								}
+
+								$FSLogixAS_ProfileDirSDDL = $FSLogixAS.ProfileDirSDDL
+
+								Switch($FSLogixAS.ProfileType)
+								{
+									"NormalProfile"	{$FSLogixAS_ProfileType = "Normal profile"; Break}
+									"OnlyRWProfile"	{$FSLogixAS_ProfileType = "Only RW profile"; Break}
+									"OnlyROProfile"	{$FSLogixAS_ProfileType = "Only RO profile"; Break}
+									"RWROProfile"	{$FSLogixAS_ProfileType = "RW/RO profile"; Break}
+									Default		{$FSLogixAS_ProfileType = "Unknown: $($FSLogixAS.ProfileType)"; Break}
+								}
+
+								$FSLogixAS_ReAttachIntervalSeconds = $FSLogixAS.ReAttachIntervalSeconds                
+								$FSLogixAS_ReAttachRetryCount      = $FSLogixAS.ReAttachRetryCount                     
+
+								Switch($FSLogixAS.RemoveOrphanedOSTFilesOnLogoff)
+								{
+									"Enable"	{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Enable"; Break}
+									"Disable"	{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Disable"; Break}
+									Default		{$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff = "Unknown: $($FSLogixAS.RemoveOrphanedOSTFilesOnLogoff)"; Break}
+								}
+
+								Switch($FSLogixAS.RoamSearch)
+								{
+									"Enable"	{$FSLogixAS_RoamSearch = "Enable"; Break}
+									"Disable"	{$FSLogixAS_RoamSearch = "Disable"; Break}
+									Default		{$FSLogixAS_RoamSearch = "Unknown: $($FSLogixAS.RoamSearch)"; Break}
+								}
+
+								Switch($FSLogixAS.SetTempToLocalPath)
+								{
+									"TakeNoAction"					{$FSLogixAS_SetTempToLocalPath = "Take no action"; Break}
+									"RedirectTempAndTmp"			{$FSLogixAS_SetTempToLocalPath = "Redirect TEMP and TMP"; Break}
+									"RedirectINetCache"				{$FSLogixAS_SetTempToLocalPath = "Redirect INetCache"; Break}
+									"RedirectTempTmpAndINetCache"	{$FSLogixAS_SetTempToLocalPath = "Redirect TEMP, TMP, and INetCache"; Break}
+									Default							{$FSLogixAS_SetTempToLocalPath = "Unknown: $($FSLogixAS.SetTempToLocalPath)"; Break}
+								}
+
+								$FSLogixAS_SIDDirNameMatch   = $FSLogixAS.SIDDirNameMatch                        
+								$FSLogixAS_SIDDirNamePattern = $FSLogixAS.SIDDirNamePattern                      
+								$FSLogixAS_SIDDirSDDL        = $FSLogixAS.SIDDirSDDL
+								$FSLogixAS_VHDNameMatch      = $FSLogixAS.VHDNameMatch                           
+								$FSLogixAS_VHDNamePattern    = $FSLogixAS.VHDNamePattern                         
+
+								Switch($FSLogixAS.VHDXSectorSize)
+								{
+									0		{$FSLogixAS_VHDXSectorSize = "System default"; Break}
+									512		{$FSLogixAS_VHDXSectorSize = "512"; Break}
+									4096	{$FSLogixAS_VHDXSectorSize = "4096"; Break}
+									Default	{$FSLogixAS_VHDXSectorSize = "Unknown: $($FSLogixAS.VHDXSectorSize)"; Break}
+								}
+
+								$FSLogixAS_VolumeWaitTimeMS = $FSLogixAS.VolumeWaitTimeMS                       					
+							}
+							Else
+							{
+								#unable to retrieve default, use built-in default values
+								$RDSUPDState                                    = "Do not change"
+								$RDSUPDLocation                                 = "None"
+								$RDSUPDSize                                     = "20"
+								$RDSTechnology                                  = "Do not manage by RAS"
+								$RDSUPDRoamingMode                              = "Exclude"
+								$RDSUPDExcludeFilePath                          = @()
+								$RDSUPDExcludeFolderPath                        = @()
+								$RDSUPDIncludeFilePath                          = @()
+								$RDSUPDIncludeFolderPath                        = @()
+								$FSLogixDeploymentSettingsDeploymentMethod      = "None"
+								$FSLogixDeploymentSettingsInstallOnlineURL      = "None"
+								$FSLogixDeploymentSettingsNetworkDrivePath      = "None"
+								$FSLogixDeploymentSettingsInstallerFileName     = "None"
+								$FSLogixDeploymentSettingsReplicate             = $False
+								$FSLogixLocationType                            = "None"
+								$FSLogixLocationOfProfileDisks                  = @()
+								$FSLogixProfileDiskFormat                       = "None"
+								$FSLogixAllocationType                          = "None"
+								$FSLogixDefaultSize                             = "0"
+								$FSLogixSettingsUserInclusionList               = @("Everyone")
+								$FSLogixSettingsUserExclusionList               = @()
+								$FSLogixSettingsCustomizeProfileFolders         = $False
+								$FSLogixSettingsExcludeCommonFolders            = "None"
+								$ExcludedCommonFolders                          = @()
+								$FSLogixSettingsFolderInclusionList             = @()
+								$FSLogixSettingsFolderExclusionList             = @()
+								$FSLogixAS_AccessNetworkAsComputerObject        = "Disable"
+								$FSLogixAS_AttachVHDSDDL                        = "None"
+								$FSLogixAS_DeleteLocalProfileWhenVHDShouldApply = "Disable"
+								$FSLogixAS_DiffDiskParentFolderPath             = "%TEMP"
+								$FSLogixAS_FlipFlopProfileDirectoryName         = "Disable"
+								$FSLogixAS_KeepLocalDir                         = "Disable"
+								$FSLogixAS_LockedRetryCount                     = 12
+								$FSLogixAS_LockedRetryInterval                  = 5
+								$FSLogixAS_NoProfileContainingFolder            = "Disable"
+								$FSLogixAS_OutlookCachedMode                    = "Disable"
+								$FSLogixAS_PreventLoginWithFailure              = "Disable"
+								$FSLogixAS_PreventLoginWithTempProfile          = "Disable"
+								$FSLogixAS_ProfileDirSDDL                       = "None"
+								$FSLogixAS_ProfileType                          = "Normal profile"
+								$FSLogixAS_ReAttachIntervalSeconds              = 10
+								$FSLogixAS_ReAttachRetryCount                   = 60
+								$FSLogixAS_RemoveOrphanedOSTFilesOnLogoff       = "Enable"
+								$FSLogixAS_RoamSearch                           = "Disable"
+								$FSLogixAS_SetTempToLocalPath                   = "Redirect TEMP, TMP, and INetCache"
+								$FSLogixAS_SIDDirNameMatch                      = "%sid%_%username%"
+								$FSLogixAS_SIDDirNamePattern                    = "%sid%_%username%"
+								$FSLogixAS_SIDDirSDDL                           = "None"
+								$FSLogixAS_VHDNameMatch                         = "Profile*"
+								$FSLogixAS_VHDNamePattern                       = "Profile_%username%"
+								$FSLogixAS_VHDXSectorSize                       = "System default"
+								$FSLogixAS_VolumeWaitTimeMS                     = 20000
+							}
 						}
 					}
 				}
@@ -7979,37 +8103,21 @@ Function OutputSite
 				#http://woshub.com/hot-to-convert-sid-to-username-and-vice-versa/
 				#for translating the User SID to the AD user name
 				$Results = Get-RASRDSGroup -SiteId $Site.Id -EA 0 4>$Null
-				If( $Results.RDSIds -Contains $RDSHost.Id )
+				
+				If($? -and $Null -ne $Results)
 				{
-					#does this group inherit default settings?
-					If($Results.InheritDefaultDesktopAccessSettings -eq $False)
+					If($Results.RDSIds -Contains $RDSHost.Id )
 					{
-						#no we don't, so get the default settings for the group
-						$GroupDefaults = $Results.RDSDefSettings
+						#does this group inherit default settings?
+						If($Results.InheritDefaultDesktopAccessSettings -eq $False)
+						{
+							#no we don't, so get the default settings for the group
+							$GroupDefaults = $Results.RDSDefSettings
 
-						$RDSRestrictDesktopAccess = $GroupDefaults.RestrictDesktopAccess.ToString()
-						$RDSRestrictedUsers       = @()
-						
-						ForEach($User in $GroupDefaults.RestrictedUsers)
-						{
-							$objSID  = New-Object System.Security.Principal.SecurityIdentifier ($User)
-							$objUser = $objSID.Translate( [System.Security.Principal.NTAccount])
-							
-							$RDSRestrictedUsers += $objUser.Value
-						}
-					}
-					Else
-					{
-						#yes we do, get the default settings for the Site
-						#use the Site default settings
-						$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
-						
-						If($? -and $Null -ne $RDSDefaults)
-						{
-							$RDSRestrictDesktopAccess = $RDSDefaults.RestrictDesktopAccess.ToString()
+							$RDSRestrictDesktopAccess = $GroupDefaults.RestrictDesktopAccess.ToString()
 							$RDSRestrictedUsers       = @()
 							
-							ForEach($User in $RDSDefaults.RestrictedUsers)
+							ForEach($User in $GroupDefaults.RestrictedUsers)
 							{
 								$objSID  = New-Object System.Security.Principal.SecurityIdentifier ($User)
 								$objUser = $objSID.Translate( [System.Security.Principal.NTAccount])
@@ -8019,9 +8127,29 @@ Function OutputSite
 						}
 						Else
 						{
-							#unable to retrieve default, use built-in default values
-							$RDSRestrictDesktopAccess = "False"
-							$RDSRestrictedUsers       = @()
+							#yes we do, get the default settings for the Site
+							#use the Site default settings
+							$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
+							
+							If($? -and $Null -ne $RDSDefaults)
+							{
+								$RDSRestrictDesktopAccess = $RDSDefaults.RestrictDesktopAccess.ToString()
+								$RDSRestrictedUsers       = @()
+								
+								ForEach($User in $RDSDefaults.RestrictedUsers)
+								{
+									$objSID  = New-Object System.Security.Principal.SecurityIdentifier ($User)
+									$objUser = $objSID.Translate( [System.Security.Principal.NTAccount])
+									
+									$RDSRestrictedUsers += $objUser.Value
+								}
+							}
+							Else
+							{
+								#unable to retrieve default, use built-in default values
+								$RDSRestrictDesktopAccess = "False"
+								$RDSRestrictedUsers       = @()
+							}
 						}
 					}
 				}
@@ -8160,32 +8288,17 @@ Function OutputSite
 				#do we inherit group or site defaults?
 				#is this RDS host in a group?
 				$Results = Get-RASRDSGroup -SiteId $Site.Id -EA 0 4>$Null
-				If( $Results.RDSIds -Contains $RDSHost.Id )
+				
+				If($? -and $Null -ne $Results)
 				{
-					#does this group inherit default settings?
-					If($Results.InheritDefaultPrinterSettings -eq $False)
+					If($Results.RDSIds -Contains $RDSHost.Id )
 					{
-						#no we don't, so get the default settings for the group
-						$RDSDefaults = $Results.RDSDefSettings
+						#does this group inherit default settings?
+						If($Results.InheritDefaultPrinterSettings -eq $False)
+						{
+							#no we don't, so get the default settings for the group
+							$RDSDefaults = $Results.RDSDefSettings
 
-						Switch ($RDSDefaults.PrinterNameFormat)
-						{
-							"PrnFormat_PRN_CMP_SES"	{$RDSPrinterNameFormat = "Printername (from Computername) in Session no."; Break}
-							"PrnFormat_SES_CMP_PRN"	{$RDSPrinterNameFormat = "Session no. (Computername from) Printername"; Break}
-							"PrnFormat_PRN_REDSES"	{$RDSPrinterNameFormat = "Printername (redirected Session no.)"; Break}
-							Default					{$RDSPrinterNameFormat = "Unable to determine RDP Printer Name Format: $($RDSDefaults.PrinterNameFormat)"; Break}
-						}
-						
-						$RDSRemoveSessionNumberFromPrinter = $GroupDefaults.RemoveSessionNumberFromPrinterName.ToString()
-					}
-					Else
-					{
-						#yes we do, get the default settings for the Site
-						#use the Site default settings
-						$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
-						
-						If($? -and $Null -ne $RDSDefaults)
-						{
 							Switch ($RDSDefaults.PrinterNameFormat)
 							{
 								"PrnFormat_PRN_CMP_SES"	{$RDSPrinterNameFormat = "Printername (from Computername) in Session no."; Break}
@@ -8194,13 +8307,32 @@ Function OutputSite
 								Default					{$RDSPrinterNameFormat = "Unable to determine RDP Printer Name Format: $($RDSDefaults.PrinterNameFormat)"; Break}
 							}
 							
-							$RDSRemoveSessionNumberFromPrinter = $RDSDefaults.RemoveSessionNumberFromPrinterName.ToString()
+							$RDSRemoveSessionNumberFromPrinter = $GroupDefaults.RemoveSessionNumberFromPrinterName.ToString()
 						}
 						Else
 						{
-							#unable to retrieve default, use built-in default values
-							$RDSPrinterNameFormat              = "Printername (from Computername) in Session no."
-							$RDSRemoveSessionNumberFromPrinter = "False"
+							#yes we do, get the default settings for the Site
+							#use the Site default settings
+							$RDSDefaults = Get-RASRDSDefaultSettings -SiteId $Site.Id -EA 0 4>$Null
+							
+							If($? -and $Null -ne $RDSDefaults)
+							{
+								Switch ($RDSDefaults.PrinterNameFormat)
+								{
+									"PrnFormat_PRN_CMP_SES"	{$RDSPrinterNameFormat = "Printername (from Computername) in Session no."; Break}
+									"PrnFormat_SES_CMP_PRN"	{$RDSPrinterNameFormat = "Session no. (Computername from) Printername"; Break}
+									"PrnFormat_PRN_REDSES"	{$RDSPrinterNameFormat = "Printername (redirected Session no.)"; Break}
+									Default					{$RDSPrinterNameFormat = "Unable to determine RDP Printer Name Format: $($RDSDefaults.PrinterNameFormat)"; Break}
+								}
+								
+								$RDSRemoveSessionNumberFromPrinter = $RDSDefaults.RemoveSessionNumberFromPrinterName.ToString()
+							}
+							Else
+							{
+								#unable to retrieve default, use built-in default values
+								$RDSPrinterNameFormat              = "Printername (from Computername) in Session no."
+								$RDSRemoveSessionNumberFromPrinter = "False"
+							}
 						}
 					}
 				}
@@ -11238,6 +11370,8 @@ Function OutputSite
 			}
 			Else
 			{
+				$FullProviderStatus = GetRASStatus $VDIHostStatus.AgentState
+
 				If($MSWord -or $PDF)
 				{
 					WriteWordLine 3 0 "Providers"
@@ -11259,7 +11393,7 @@ Function OutputSite
 					$ScriptInformation.Add(@{Data = "Provider"; Value = $VDIHost.Server; }) > $Null
 					$ScriptInformation.Add(@{Data = "Type"; Value = $VDIType; }) > $Null
 					$ScriptInformation.Add(@{Data = "VDI Agent"; Value = $VDIHost.VDIAgent; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $VDIHostStatus.AgentState.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $FullProviderStatus; }) > $Null
 					$ScriptInformation.Add(@{Data = "Direct address"; Value = $VDIHost.DirectAddress; }) > $Null
 					$ScriptInformation.Add(@{Data = "Description"; Value = $VDIHost.Description; }) > $Null
 					$ScriptInformation.Add(@{Data = "Log level"; Value = $VDIHostStatus.LogLevel; }) > $Null
@@ -11292,7 +11426,7 @@ Function OutputSite
 					Line 3 "Provider`t`t: " $VDIHost.Server
 					Line 3 "Type`t`t`t: " $VDIType
 					Line 3 "VDI Agent`t`t: " $VDIHost.VDIAgent
-					Line 3 "Status`t`t`t: " $VDIHostStatus.AgentState.ToString()
+					Line 3 "Status`t`t`t: " $FullProviderStatus
 					Line 3 "Direct address`t`t: " $VDIHost.DirectAddress
 					Line 3 "Description`t`t: " $VDIHost.Description
 					Line 3 "Log level`t`t: " $VDIHostStatus.LogLevel
@@ -11309,7 +11443,7 @@ Function OutputSite
 					$columnHeaders = @("Provider",($Script:htmlsb),$VDIHost.Server,$htmlwhite)
 					$rowdata += @(,("Type",($Script:htmlsb),$VDIType,$htmlwhite))
 					$rowdata += @(,("VDI Agent",($Script:htmlsb),$VDIHost.VDIAgent,$htmlwhite))
-					$rowdata += @(,("Status",($Script:htmlsb),$VDIHostStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$FullProviderStatus,$htmlwhite))
 					$rowdata += @(,("Direct address",($Script:htmlsb),$VDIHost.DirectAddress,$htmlwhite))
 					$rowdata += @(,("Description",($Script:htmlsb),$VDIHost.Description,$htmlwhite))
 					$rowdata += @(,("Log level",($Script:htmlsb),$VDIHostStatus.LogLevel,$htmlwhite))
@@ -13883,13 +14017,15 @@ Function OutputSite
 					}
 				}
 				
+				$GWStatusAgentState = GetRASStatus $GWStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					WriteWordLine 3 0 "Gateways $($GW.Server)"
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Server"; Value = $GW.Server; }) > $Null
 					$ScriptInformation.Add(@{Data = "Mode"; Value = $GW.GWMode; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $GWStatus.AgentState; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $GWStatusAgentState; }) > $Null
 					$ScriptInformation.Add(@{Data = "Description"; Value = $GW.Description; }) > $Null
 					$ScriptInformation.Add(@{Data = "Certificate"; Value = $GWCertificates; }) > $Null
 					$ScriptInformation.Add(@{Data = "Log level"; Value = $GWStatus.LogLevel; }) > $Null
@@ -13922,7 +14058,7 @@ Function OutputSite
 					Line 2 "Gateways $($GW.Server)"
 					Line 3 "Server`t`t`t: " $GW.Server
 					Line 3 "Mode`t`t`t: " $GW.GWMode
-					Line 3 "Status`t`t`t: " $GWStatus.AgentState
+					Line 3 "Status`t`t`t: " $GWStatusAgentState
 					Line 3 "Description`t`t: " $GW.Description
 					Line 3 "Certificate`t`t: " $GWCertificates
 					Line 3 "Log level`t`t: " $GWStatus.LogLevel
@@ -13939,7 +14075,7 @@ Function OutputSite
 					$rowdata = @()
 					$columnHeaders = @("Server",($Script:htmlsb),$GW.Server,$htmlwhite)
 					$rowdata += @(,("Mode",($Script:htmlsb),$GW.GWMode.ToString(),$htmlwhite))
-					$rowdata += @(,("Status",($Script:htmlsb),$GWStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$GWStatusAgentState.ToString(),$htmlwhite))
 					$rowdata += @(,("Description",($Script:htmlsb),$GW.Description,$htmlwhite))
 					$rowdata += @(,("Certificate",($Script:htmlsb),$GWCertificates,$htmlwhite))
 					$rowdata += @(,("Log level",($Script:htmlsb),$GWStatus.LogLevel,$htmlwhite))
@@ -15455,13 +15591,15 @@ Function OutputSite
 					$PAPriority = "Standby"
 				}
 
+				$PAStatusAgentState = GetRASStatus $PAStatus.AgentState
+				
 				If($MSWord -or $PDF)
 				{
 					WriteWordLine 3 0 "Publishing Agents $($PA.Server)"
 					$ScriptInformation = New-Object System.Collections.ArrayList
 					$ScriptInformation.Add(@{Data = "Server"; Value = $PA.Server; }) > $Null
 					$ScriptInformation.Add(@{Data = "Priority"; Value = $PAPriority; }) > $Null
-					$ScriptInformation.Add(@{Data = "Status"; Value = $PAStatus.AgentState; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $PAStatusAgentState; }) > $Null
 					$ScriptInformation.Add(@{Data = "Log level"; Value = $PAStatus.LogLevel; }) > $Null
 					$ScriptInformation.Add(@{Data = "Last modification by"; Value = $PA.AdminLastMod; }) > $Null
 					$ScriptInformation.Add(@{Data = "Modified on"; Value = $PA.TimeLastMod.ToString(); }) > $Null
@@ -15492,7 +15630,7 @@ Function OutputSite
 					Line 2 "Publishing Agents $($PA.Server)"
 					Line 3 "Server`t`t`t: " $PA.Server
 					Line 3 "Priority`t`t: " $PAPriority
-					Line 3 "Status`t`t`t: " $PAStatus.AgentState
+					Line 3 "Status`t`t`t: " $PAStatusAgentState
 					Line 3 "Log level`t`t: " $PAStatus.LogLevel
 					Line 3 "Last modification by`t: " $PA.AdminLastMod
 					Line 3 "Modified on`t`t: " $PA.TimeLastMod.ToString()
@@ -15507,7 +15645,7 @@ Function OutputSite
 					$rowdata = @()
 					$columnHeaders = @("Server",($Script:htmlsb),$PA.Server,$htmlwhite)
 					$rowdata += @(,("Priority",($Script:htmlsb),$PAPriority,$htmlwhite))
-					$rowdata += @(,("Status",($Script:htmlsb),$PAStatus.AgentState.ToString(),$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$PAStatusAgentState,$htmlwhite))
 					$rowdata += @(,("Log level",($Script:htmlsb),$PAStatus.LogLevel,$htmlwhite))
 					$rowdata += @(,("Last modification by",($Script:htmlsb), $PA.AdminLastMod,$htmlwhite))
 					$rowdata += @(,("Modified on",($Script:htmlsb), $PA.TimeLastMod.ToString(),$htmlwhite))
@@ -15593,10 +15731,900 @@ Function OutputSite
 	
 	#Enrollment Servers - not in PoSH
 	
-	#HALB - not in PoSH
+	#HALB
+	If([version]$Script:RASVersion -ge [version]"18.3")
+	{
+		$HALBs = Get-RASHALB -Siteid $Site.Id -EA 0 4> $Null 
+
+		If(!$?)
+		{
+			Write-Warning "
+			`n
+			Unable to retrieve HALBs for Site $($Site.Name)`
+			"
+			If($MSWord -or $PDF)
+			{
+				WriteWordLine 0 0 "Unable to retrieve HALBs for Site $($Site.Name)"
+			}
+			If($Text)
+			{
+				Line 0 "Unable to retrieve HALBs for Site $($Site.Name)"
+			}
+			If($HTML)
+			{
+				WriteHTMLLine 0 0 "Unable to retrieve HALBs for Site $($Site.Name)"
+			}
+		}
+		ElseIf($? -and $Null -eq $HALBs)
+		{
+			Write-Host "
+			No HALBs retrieved for Site $($Site.Name).`
+			" -ForegroundColor White
+			If($MSWord -or $PDF)
+			{
+				WriteWordLine 0 0 "No HALBs retrieved for Site $($Site.Name)"
+			}
+			If($Text)
+			{
+				Line 0 "No HALBs retrieved for Site $($Site.Name)"
+			}
+			If($HTML)
+			{
+				WriteHTMLLine 0 0 "No HALBs retrieved for Site $($Site.Name)"
+			}
+		}
+		Else
+		{
+			If($MSWord -or $PDF)
+			{
+				WriteWordLine 2 0 "HALB"
+			}
+			If($Text)
+			{
+				Line 1 "HALB"
+			}
+			If($HTML)
+			{
+				WriteHTMLLine 2 0 "HALB"
+			}
+
+			Write-Verbose "$(Get-Date -Format G): `t`tOutput HALB"
+			ForEach($HALB in $HALBs)
+			{
+				$HALBStatusResult = Get-RASHALBStatus -Name $HALB.Name -EA 0 4> $Null 
+				
+				If($? -and $Null -ne $HALBStatusResult)
+				{
+					$HALBStatus = GetRASStatus $HALBStatusResult.AgentState
+				}
+				Else
+				{
+					$HALBStatus = "Unable to determine HALB status"
+				}
+				
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 3 0 "HALB $($HALB.Name)"
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Name"; Value = $HALB.Name; }) > $Null
+					$ScriptInformation.Add(@{Data = "IPv4"; Value = $HALB.VirtualIPV4; }) > $Null
+					$ScriptInformation.Add(@{Data = "IPv6"; Value = $HALB.VirtualIPV6; }) > $Null
+					$ScriptInformation.Add(@{Data = "Status"; Value = $HALBStatus; }) > $Null
+					$ScriptInformation.Add(@{Data = "Description"; Value = $HALB.Description; }) > $Null
+					$ScriptInformation.Add(@{Data = "Public Address"; Value = $HALB.PublicAddress; }) > $Null
+					$ScriptInformation.Add(@{Data = "Last modification by"; Value = $HALB.AdminLastMod; }) > $Null
+					$ScriptInformation.Add(@{Data = "Modified on"; Value = $HALB.TimeLastMod.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Created by"; Value = $HALB.AdminCreate; }) > $Null
+					$ScriptInformation.Add(@{Data = "Created on"; Value = $HALB.TimeCreate.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "ID"; Value = $HALB.Id.ToString(); }) > $Null
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 2 "HALB $($HALB.Name)"
+					Line 3 "Name`t`t`t: " $HALB.Name
+					Line 3 "IPv4`t`t`t: " $HALB.VirtualIPV4
+					Line 3 "IPv6`t`t`t: " $HALB.VirtualIPV6
+					Line 3 "Status`t`t`t: " $HALBStatus
+					Line 3 "Description`t`t: " $HALB.Description
+					Line 3 "Public Address`t`t: " $HALB.PublicAddress
+					Line 3 "Last modification by`t: " $HALB.AdminLastMod
+					Line 3 "Modified on`t`t: " $HALB.TimeLastMod.ToString()
+					Line 3 "Created by`t`t: " $HALB.AdminCreate
+					Line 3 "Created on`t`t: " $HALB.TimeCreate.ToString()
+					Line 3 "ID`t`t`t: " $HALB.Id.ToString()
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					WriteHTMLLine 3 0 "HALB $($HALB.Name)"
+					$rowdata = @()
+					$columnHeaders = @("Name",($Script:htmlsb),$HALB.Name,$htmlwhite)
+					$rowdata += @(,("IPv4",($Script:htmlsb),$HALB.VirtualIPV4,$htmlwhite))
+					$rowdata += @(,("IPv6",($Script:htmlsb),$HALB.VirtualIPV6,$htmlwhite))
+					$rowdata += @(,("Status",($Script:htmlsb),$HALBStatus,$htmlwhite))
+					$rowdata += @(,("Description",($Script:htmlsb),$HALB.Description,$htmlwhite))
+					$rowdata += @(,("Public Address",($Script:htmlsb),$HALB.PublicAddress,$htmlwhite))
+					$rowdata += @(,("Last modification by",($Script:htmlsb), $HALB.AdminLastMod,$htmlwhite))
+					$rowdata += @(,("Modified on",($Script:htmlsb), $HALB.TimeLastMod.ToString(),$htmlwhite))
+					$rowdata += @(,("Created by",($Script:htmlsb), $HALB.AdminCreate,$htmlwhite))
+					$rowdata += @(,("Created on",($Script:htmlsb), $HALB.TimeCreate.ToString(),$htmlwhite))
+					$rowdata += @(,("ID",($Script:htmlsb),$HALB.Id.ToString(),$htmlwhite))
+
+					$msg = ""
+					$columnWidths = @("200","275")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "General"
+				}
+				If($Text)
+				{
+					Line 2 "General"
+				}
+				If($HTML)
+				{
+					#Nothing
+				}
+				
+				Switch($HALB.IPVersion)
+				{
+					"Version4"		{$HALBIPVersion = "Version 4"; Break}
+					"Version6"		{$HALBIPVersion = "Version 6"; Break}
+					"BothVersions"	{$HALBIPVersion = "Both version 4 & 6"; Break}
+					Default			{$HALBIPVersion = "Unable to determine IP version: $($HALB.IPVersion)"; Break}
+				}
+				
+				If($MSWord -or $PDF)
+				{
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Enable HALB"; Value = $HALB.EnableHALBInstance.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Name"; Value = $HALB.Name; }) > $Null
+					$ScriptInformation.Add(@{Data = "Description"; Value = $HALB.Description; }) > $Null
+					$ScriptInformation.Add(@{Data = "Public address"; Value = $HALB.PublicAddress; }) > $Null
+					$ScriptInformation.Add(@{Data = "Virtual IP"; Value = ""; }) > $Null
+					$ScriptInformation.Add(@{Data = "     Use IP version"; Value = $HALBIPVersion; }) > $Null
+					$ScriptInformation.Add(@{Data = "     IPv4"; Value = $HALB.VirtualIPV4; }) > $Null
+					$ScriptInformation.Add(@{Data = "     Subnet Mask"; Value = $HALB.SubNetMask; }) > $Null
+					$ScriptInformation.Add(@{Data = "     IPv6"; Value = $HALB.VirtualIPV6; }) > $Null
+					$ScriptInformation.Add(@{Data = "     Prefix"; Value = $HALB.PrefixIPV6; }) > $Null
+					$ScriptInformation.Add(@{Data = "Settings"; Value = ""; }) > $Null
+					$ScriptInformation.Add(@{Data = "     LB Gateway Payload"; Value = $HALB.EnableGWPayload.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "     LB SSL Payload"; Value = $HALB.EnableSSLPayload.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "     Device Management"; Value = $HALB.EnableDeviceManagement.ToString(); }) > $Null
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 3 "Enable HALB`t`t`t: " $HALB.EnableHALBInstance.ToString()
+					Line 3 "Name`t`t`t`t: " $HALB.Name
+					Line 3 "Description`t`t`t: " $HALB.Description
+					Line 3 "Public address`t`t`t: " $HALB.PublicAddress
+					Line 3 "Virtual IP"
+					Line 4 "Use IP version`t`t: " $HALBIPVersion
+					Line 4 "IPv4`t`t`t: " $HALB.VirtualIPV4
+					Line 4 "Subnet Mask`t`t: " $HALB.SubNetMask
+					Line 4 "IPv6`t`t`t: " $HALB.VirtualIPV6
+					Line 4 "Prefix`t`t`t: " $HALB.PrefixIPV6
+					Line 3 "Settings"
+					Line 4 "LB Gateway Payload`t: " $HALB.EnableGWPayload.ToString()
+					Line 4 "LB SSL Payload`t`t: " $HALB.EnableSSLPayload.ToString()
+					Line 4 "Device Management`t: " $HALB.EnableDeviceManagement.ToString()
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+					$columnHeaders = @("Enable HALB",($Script:htmlsb),$HALB.EnableHALBInstance.ToString(),$htmlwhite)
+					$rowdata += @(,("Name",($Script:htmlsb),$HALB.Name,$htmlwhite))
+					$rowdata += @(,("Description",($Script:htmlsb),$HALB.Description,$htmlwhite))
+					$rowdata += @(,("Public address",($Script:htmlsb),$HALB.PublicAddress,$htmlwhite))
+					$rowdata += @(,("Virtual IP",($Script:htmlsb), "",$htmlwhite))
+					$rowdata += @(,("     Use IP version",($Script:htmlsb), $HALBIPVersion,$htmlwhite))
+					$rowdata += @(,("     IPv4",($Script:htmlsb), $HALB.VirtualIPV4,$htmlwhite))
+					$rowdata += @(,("     Subnet Mask",($Script:htmlsb), $HALB.SubNetMask,$htmlwhite))
+					$rowdata += @(,("     IPv6",($Script:htmlsb), $HALB.VirtualIPV6,$htmlwhite))
+					$rowdata += @(,("     Prefix",($Script:htmlsb), $HALB.PrefixIPV6,$htmlwhite))
+					$rowdata += @(,("Settings",($Script:htmlsb), "",$htmlwhite))
+					$rowdata += @(,("     LB Gateway Payload",($Script:htmlsb), $HALB.EnableGWPayload.ToString(),$htmlwhite))
+					$rowdata += @(,("     LB SSL Payload",($Script:htmlsb), $HALB.EnableSSLPayload.ToString(),$htmlwhite))
+					$rowdata += @(,("     Device Management",($Script:htmlsb), $HALB.EnableDeviceManagement.ToString(),$htmlwhite))
+
+					$msg = "General"
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "LB gateway payload"
+				}
+				If($Text)
+				{
+					Line 2 "LB gateway payload"
+				}
+				If($HTML)
+				{
+					WriteHTMLLine 4 0 "LB gateway payload"
+				}
+				
+				$HALBGatewayPort = $HALB.GatewayConfig.Port.ToString()
+				$HALBGateways    = $HALB.GatewayConfig.Gateways
+				
+				#First, get the port
+				If($MSWord -or $PDF)
+				{
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Port"; Value = $HALBGatewayPort; }) > $Null
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 3 "Port: " $HALBGatewayPort
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+					$columnHeaders = @("Port",($Script:htmlsb),$HALBGatewayPort,$htmlwhite)
+					#$rowdata += @(,("",($Script:htmlsb),"",$htmlwhite))
+
+					$msg = ""
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+
+				#second, process the gateways
+				#do output headers
+				If($MSWord -or $PDF)
+				{
+					[System.Collections.Hashtable[]] $GatewaysWordTable = @();
+				}
+				If($Text)
+				{
+					Line 3 "Gateways                                                 Status                                  "
+					Line 3 "================================================================================================="
+					#       abcdefghijklmno.abcdefghijklmno.local (999.999.999.999)SS1234567890123456789012345678901234567890
+					#       1234567890123456789012345678901234567890123456789012345
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+				}
+				
+				#process the gateways data
+				ForEach($GWItem in $HALBGateways)
+				{
+					$ip = $GWItem.Keys
+					$Results = [System.Net.Dns]::gethostentry($ip)
+					$hostname = $Results.HostName
+					$TempGW = Get-RASGWStatus -Server $hostname -EA 0 4> $Null
+					$HALBGWStatus = GetRASStatus $TempGW.AgentState
+					
+					If($MSWord -or $PDF)
+					{
+						$GatewaysWordTableRowHash = @{
+							Gateway       = "$hostname ($ip)";
+							GatewayStatus = $HALBGWStatus;
+						}
+						$GatewaysWordTable += $GatewaysWordTableRowHash
+					}
+					If($Text)
+					{
+						Line 3 ( "{0,-55}  {1,-40}" -f "$hostname ($ip)", $HALBGWStatus)
+					}
+					If($HTML)
+					{
+						$rowdata += @(,(
+						"$hostname ($ip)",$htmlwhite,
+						$HALBGWStatus,$htmlwhite))
+					}
+				}
+				
+				#output the Word/PDF and HTML tables
+				If($MSWord -or $PDF)
+				{
+					If($GatewaysWordTable.Count -gt 0)
+					{
+						$Table = AddWordTable -Hashtable $GatewaysWordTable `
+						-Columns  Gateway,GatewayStatus `
+						-Headers  "Gateways","Status"`
+						-Format $wdTableGrid `
+						-AutoFit $wdAutoFitFixed;
+
+						SetWordCellFormat -Collection $Table.Rows.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+						$Table.Columns.Item(1).Width = 200;
+						$Table.Columns.Item(2).Width = 250;
+
+						$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+						FindWordDocumentEnd
+						$Table = $Null
+						WriteWordLine 0 0 ""
+					}
+				}
+				If($Text)
+				{
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$columnHeaders = @(
+					"Gateways",($Script:htmlsb),
+					"Status",($Script:htmlsb))
+
+					$msg = ""
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths -tablewidth "600"
+					WriteHTMLLine 0 0 ""
+				}
+				
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "LB SSL payload"
+				}
+				If($Text)
+				{
+					Line 2 "LB SSL payload"
+				}
+				If($HTML)
+				{
+					#Nothing
+				}
+				
+				$HALBSSLGatewayPort = $HALB.SSLConfig.GatewayConfig.Port.ToString()
+				$HALBSSLGateways    = $HALB.SSLConfig.GatewayConfig.Gateways
+				
+				Switch($HALB.SSLConfig.SSLMode)
+				{
+					"SSLOffloading"		{$HALBSSLMode = "SSL Offloading"; Break}
+					"SSLPassthrough"	{$HALBSSLMode = "Passthrough"; Break}
+					Default				{$HALBSSLMode = "Unable to etermine SSL Mode: $($HALB.SSLConfig.SSLMode)"; Break}
+				}
+				
+				If($HALB.SSLConfig.SSLMode -eq "SSLOffloading")
+				{
+					Switch($HALB.SSLConfig.MinSSLVersion)
+					{
+						"SSLv2"		{$HALBSSLAcceptedSSLVersions = "SSL v2 - TLS v1.2 (Weak)"; Break}
+						"SSLv3"		{$HALBSSLAcceptedSSLVersions = "SSL v3 - TLS v1.2"; Break}
+						"TLSv1"		{$HALBSSLAcceptedSSLVersions = "TLS v1.0 - TLS v1.2"; Break}
+						"TLSv1_1"	{$HALBSSLAcceptedSSLVersions = "TLS v1.1 - TLS v1.2"; Break}
+						"TLSv1_2"	{$HALBSSLAcceptedSSLVersions = "TLS v1.2 only (Strong)"; Break}
+						Default		{$HALBSSLAcceptedSSLVersions = "Unable to determine Minimum SSL version: $($HALB.SSLConfig.MinSSLVersion)"; Break}
+					}
+					
+					If($HALB.SSLConfig.SSLCipherStrength -eq "Custom")
+					{
+						$HALBSSLCipherStrength = "Custom"
+						$HALBSSLCipher         = $HALB.SSLConfig.SSLCustomCipher
+					}
+					Else
+					{
+						$HALBSSLCipherStrength = $HALB.SSLConfig.SSLCipherStrength
+						Switch($HALB.SSLConfig.SSLCipherStrength)
+						{
+							"Low"		{$HALBSSLCipher	= "All:!aNULL:!eNULL"; Break}
+							"Medium"	{$HALBSSLCipher	= "ALL:!aNULL:!ADH:!eNULL:!LOW:!EXP:RC4+RSA:+HIGH:+MEDIUM"; Break}
+							"High"		{$HALBSSLCipher	= "EECDH:!SSLv2:!aNULL:!RC4:!ADH:!eNULL:!LOW:!MEDIUM:!EXP:+HIGH"; Break}
+							Default		{$HALBSSLCipher = "Unable to determine SSL cipher strength: $($HALB.SSLConfig.SSLCipherStrength)"; Break}
+						}
+					}
+					$HALBSSLUseServerPreference = $HALB.SSLConfig.SSLCipherPreference.ToString()
+					If($HALB.SSLConfig.CertID -eq 0)
+					{
+						$HALBSSLCertificates = "All matching usage"
+					}
+					Else
+					{
+						$Results = Get-RASCertificate -Id $HALB.SSLConfig.CertID -EA 0 4> $Null
+						
+						If($? -and $Null -ne $Results)
+						{
+							$HALBSSLCertificates = $Results.Name
+						}
+						Else
+						{
+							$HALBSSLCertificates = "Unable to find certificate with an ID of $($HALB.SSLConfig.CertID)"
+						}
+					}
+				}
+				Else
+				{
+					$HALBSSLAcceptedSSLVersions = ""
+					$HALBSSLCipherStrength      = ""
+					$HALBSSLCipher              = ""
+					$HALBSSLUseServerPreference = ""
+					$HALBSSLCertificates        = ""
+				}
+				
+				#First, get the port
+				If($MSWord -or $PDF)
+				{
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Port"; Value = $HALBSSLGatewayPort; }) > $Null
+					$ScriptInformation.Add(@{Data = "Mode"; Value = $HALBSSLMode; }) > $Null
+					If($HALB.SSLConfig.SSLMode -eq "SSLOffloading")
+					{
+						$ScriptInformation.Add(@{Data = "Security"; Value = ""; }) > $Null
+						$ScriptInformation.Add(@{Data = "     Accepted SSL Versions"; Value = $HALBSSLAcceptedSSLVersions; }) > $Null
+						$ScriptInformation.Add(@{Data = "     Cipher Strength"; Value = $HALBSSLCipherStrength; }) > $Null
+						$ScriptInformation.Add(@{Data = "     Cipher"; Value = $HALBSSLCipher; }) > $Null
+						$ScriptInformation.Add(@{Data = "     Use ciphers according to server preference"; Value = $HALBSSLUseServerPreference; }) > $Null
+						$ScriptInformation.Add(@{Data = "     Certificates"; Value = $HALBSSLCertificates; }) > $Null
+					}
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 3 "Port: " $HALBSSLGatewayPort
+					Line 3 "Mode: " $HALBSSLMode
+					If($HALB.SSLConfig.SSLMode -eq "SSLOffloading")
+					{
+						Line 3 "Security"
+						Line 4 "Accepted SSL Versions`t`t`t`t: " $HALBSSLAcceptedSSLVersions
+						Line 4 "Cipher Strength`t`t`t`t`t: " $HALBSSLCipherStrength
+						Line 4 "Cipher`t`t`t`t`t`t: " $HALBSSLCipher
+						Line 4 "Use ciphers according to server preference`t: " $HALBSSLUseServerPreference
+						Line 4 "Certificates`t`t`t`t`t: " $HALBSSLCertificates
+					}
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+					$columnHeaders = @("Port",($Script:htmlsb),$HALBSSLGatewayPort,$htmlwhite)
+					$rowdata += @(,("Mode",($Script:htmlsb),$HALBSSLMode,$htmlwhite))
+					If($HALB.SSLConfig.SSLMode -eq "SSLOffloading")
+					{
+						$rowdata += @(,( "Security",($Script:htmlsb), "",$htmlwhite))
+						$rowdata += @(,( "     Accepted SSL Versions",($Script:htmlsb), $HALBSSLAcceptedSSLVersions,$htmlwhite))
+						$rowdata += @(,( "     Cipher Strength",($Script:htmlsb), $HALBSSLCipherStrength,$htmlwhite))
+						$rowdata += @(,( "     Cipher",($Script:htmlsb), $HALBSSLCipher,$htmlwhite))
+						$rowdata += @(,( "     Use ciphers according to server preference",($Script:htmlsb), $HALBSSLUseServerPreference,$htmlwhite))
+						$rowdata += @(,( "     Certificates",($Script:htmlsb), $HALBSSLCertificates,$htmlwhite))
+					}
+
+					$msg = ""
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+
+				#second, process the gateways
+				#do output headers
+				If($MSWord -or $PDF)
+				{
+					[System.Collections.Hashtable[]] $GatewaysWordTable = @();
+				}
+				If($Text)
+				{
+					Line 3 "Gateways                                                 Status                                  "
+					Line 3 "================================================================================================="
+					#       abcdefghijklmno.abcdefghijklmno.local (999.999.999.999)SS1234567890123456789012345678901234567890
+					#       1234567890123456789012345678901234567890123456789012345
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+				}
+				
+				#process the gateways data
+				ForEach($GWItem in $HALBSSLGateways)
+				{
+					$ip = $GWItem.Keys
+					$Results = [System.Net.Dns]::gethostentry($ip)
+					$hostname = $Results.HostName
+					$TempGW = Get-RASGWStatus -Server $hostname -EA 0 4> $Null
+					$HALBGWStatus = GetRASStatus $TempGW.AgentState
+					
+					If($MSWord -or $PDF)
+					{
+						$GatewaysWordTableRowHash = @{
+							Gateway       = "$hostname ($ip)";
+							GatewayStatus = $HALBGWStatus;
+						}
+						$GatewaysWordTable += $GatewaysWordTableRowHash
+					}
+					If($Text)
+					{
+						Line 3 ( "{0,-55}  {1,-40}" -f "$hostname ($ip)", $HALBGWStatus)
+					}
+					If($HTML)
+					{
+						$rowdata += @(,(
+						"$hostname ($ip)",$htmlwhite,
+						$HALBGWStatus,$htmlwhite))
+					}
+				}
+				
+				#output the Word/PDF and HTML tables
+				If($MSWord -or $PDF)
+				{
+					If($GatewaysWordTable.Count -gt 0)
+					{
+						$Table = AddWordTable -Hashtable $GatewaysWordTable `
+						-Columns  Gateway,GatewayStatus `
+						-Headers  "Gateways","Status"`
+						-Format $wdTableGrid `
+						-AutoFit $wdAutoFitFixed;
+
+						SetWordCellFormat -Collection $Table.Rows.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+						$Table.Columns.Item(1).Width = 200;
+						$Table.Columns.Item(2).Width = 250;
+
+						$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+						FindWordDocumentEnd
+						$Table = $Null
+						WriteWordLine 0 0 ""
+					}
+				}
+				If($Text)
+				{
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$columnHeaders = @(
+					"Gateways",($Script:htmlsb),
+					"Status",($Script:htmlsb))
+
+					$msg = ""
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths -tablewidth "600"
+					WriteHTMLLine 0 0 ""
+				}
+<#
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "Device Manager"
+				}
+				If($Text)
+				{
+					Line 2 "Device Manager"
+				}
+				If($HTML)
+				{
+					#Nothing
+				}
+				
+				If($MSWord -or $PDF)
+				{
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Port"; Value = ""; }) > $Null
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 3 "Port: "
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+					$columnHeaders = @("Port",($Script:htmlsb),"",$htmlwhite)
+					$rowdata += @(,("",($Script:htmlsb),"",$htmlwhite))
+
+					$msg = "Device Manager"
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+#>
+
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "Devices"
+				}
+				If($Text)
+				{
+					Line 2 "Devices"
+				}
+				If($HTML)
+				{
+					#Nothing
+				}
+				
+				$HALBDevices = Get-RASHALBDevice -HALBName $HALB.Name -EA 0 4> $Null
+				
+				If((!$?) -or ($? -and $Null -eq $HALBDevices))
+				{
+					Write-Host "
+					No HALB Devices retrieved for HALB $($HALB.Name).`
+					" -ForegroundColor White
+					If($MSWord -or $PDF)
+					{
+						WriteWordLine 0 0 "No HALB Devices retrieved for HALB $($HALB.Name)"
+					}
+					If($Text)
+					{
+						Line 0 "No HALB Devices retrieved for HALB $($HALB.Name)"
+					}
+					If($HTML)
+					{
+						WriteHTMLLine 0 0 "No HALB Devices retrieved for HALB $($HALB.Name)"
+					}
+				}
+				Else
+				{
+					If($MSWord -or $PDF)
+					{
+						[System.Collections.Hashtable[]] $HALBDevicesWordTable = @();
+					}
+					If($Text)
+					{
+						Line 3 "Devices          ID"
+						Line 3 "==================="
+						#       999.999.999.999SS12
+					}
+					If($HTML)
+					{
+						$rowdata = @()
+					}
+					
+					#process the gateways data
+					ForEach($HALBDevice in $HALBDevices)
+					{
+						$ip = $HALBDevice.DeviceIP
+						$ID = $HALBDevice.DeviceId
+						
+						If($MSWord -or $PDF)
+						{
+							$HALBDevicesWordTableRowHash = @{
+								DeviceIP = $ip;
+								DeviceID = $ID;
+							}
+							$HALBDevicesWordTable += $HALBDevicesWordTableRowHash
+						}
+						If($Text)
+						{
+							Line 3 ( "{0,-15}  {1,-2}" -f $ip, $ID)
+						}
+						If($HTML)
+						{
+							$rowdata += @(,(
+							$ip,$htmlwhite,
+							$ID,$htmlwhite))
+						}
+					}
+					
+					#output the Word/PDF and HTML tables
+					If($MSWord -or $PDF)
+					{
+						If($HALBDevicesWordTable.Count -gt 0)
+						{
+							$Table = AddWordTable -Hashtable $HALBDevicesWordTable `
+							-Columns  DeviceIP,DeviceID `
+							-Headers  "Devices","ID" `
+							-Format $wdTableGrid `
+							-AutoFit $wdAutoFitFixed;
+
+							SetWordCellFormat -Collection $Table.Rows.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+							$Table.Columns.Item(1).Width = 100;
+							$Table.Columns.Item(2).Width = 50;
+
+							$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+							FindWordDocumentEnd
+							$Table = $Null
+							WriteWordLine 0 0 ""
+						}
+					}
+					If($Text)
+					{
+						Line 0 ""
+					}
+					If($HTML)
+					{
+						$columnHeaders = @(
+						"Devices",($Script:htmlsb),
+						"ID",($Script:htmlsb))
+
+						$msg = ""
+						$columnWidths = @("100","50")
+						FormatHTMLTable $msg -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths -tablewidth "150"
+						WriteHTMLLine 0 0 ""
+					}
+				}
+
+				If($MSWord -or $PDF)
+				{
+					WriteWordLine 4 0 "Advanced"
+				}
+				If($Text)
+				{
+					Line 2 "Advanced"
+				}
+				If($HTML)
+				{
+					#Nothing
+				}
+				
+				If($MSWord -or $PDF)
+				{
+					$ScriptInformation = New-Object System.Collections.ArrayList
+					$ScriptInformation.Add(@{Data = "Enable RDP UPD tunneling"; Value = $HALB.EnableUDPTunneling.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Maximum TCP connections"; Value = $HALB.MaxTCPConnections.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Client inactivity timeout (s)"; Value = $HALB.ClientIdleTimeout.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Gateway connection timeout (s)"; Value = $HALB.GWConnectionTimeout.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Client connection queue timeout (s)"; Value = $HALB.ClientQueueTimeout.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Gateway inactivity timeout (s)"; Value = $HALB.GatewayIdleTimeout.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Amount of TCP connections per second"; Value = $HALB.SessionsRate.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Gateways health check intervals (s)"; Value = $HALB.GWHealthCheckInterval.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP virtual router ID"; Value = $HALB.VirtualRouterID.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP authentication password"; Value = ""; }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP broadcast interval (m)"; Value = $HALB.VrrpBroadcastInterval.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP health check script interval (s)"; Value = $HALB.VrrpHealthCheckInterval.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP health check script timeout"; Value = $HALB.VrrpHealthCheckTimeout.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "VRRP advertisement interval (s)"; Value = $HALB.VrrpAdvertInterval.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Enable OS updates"; Value = $HALB.OSUpdate.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Keep existing load balancing settings"; Value = $HALB.KeepLBProxyConfig.ToString(); }) > $Null
+					$ScriptInformation.Add(@{Data = "Keep existing VRRP/keepalive settings"; Value = $HALB.KeepVRRPConfig.ToString(); }) > $Null
+
+					$Table = AddWordTable -Hashtable $ScriptInformation `
+					-Columns Data,Value `
+					-List `
+					-Format $wdTableGrid `
+					-AutoFit $wdAutoFitFixed;
+
+					SetWordCellFormat -Collection $Table -Size 10 -BackgroundColor $wdColorWhite
+					SetWordCellFormat -Collection $Table.Columns.Item(1).Cells -Bold -BackgroundColor $wdColorGray15;
+
+					$Table.Columns.Item(1).Width = 200;
+					$Table.Columns.Item(2).Width = 250;
+
+					$Table.Rows.SetLeftIndent($Indent0TabStops,$wdAdjustProportional)
+
+					FindWordDocumentEnd
+					$Table = $Null
+					WriteWordLine 0 0 ""
+				}
+				If($Text)
+				{
+					Line 3 "Enable RDP UPD tunneling`t`t: " $HALB.EnableUDPTunneling.ToString()
+					Line 3 "Maximum TCP connections`t`t`t: " $HALB.MaxTCPConnections.ToString()
+					Line 3 "Client inactivity timeout (s)`t`t: " $HALB.ClientIdleTimeout.ToString()
+					Line 3 "Gateway connection timeout (s)`t`t: " $HALB.GWConnectionTimeout.ToString()
+					Line 3 "Client connection queue timeout (s)`t: " $HALB.ClientQueueTimeout.ToString()
+					Line 3 "Gateway inactivity timeout (s)`t`t: " $HALB.GatewayIdleTimeout.ToString()
+					Line 3 "Amount of TCP connections per second`t: " $HALB.SessionsRate.ToString()
+					Line 3 "Gateways health check intervals (s)`t: " $HALB.GWHealthCheckInterval.ToString()
+					Line 3 "VRRP virtual router ID`t`t`t: " $HALB.VirtualRouterID.ToString()
+					Line 3 "VRRP authentication password`t`t: " 
+					Line 3 "VRRP broadcast interval (m)`t`t: " $HALB.VrrpBroadcastInterval.ToString()
+					Line 3 "VRRP health check script interval (s)`t: " $HALB.VrrpHealthCheckInterval.ToString()
+					Line 3 "VRRP health check script timeout`t: " $HALB.VrrpHealthCheckTimeout.ToString()
+					Line 3 "VRRP advertisement interval (s)`t`t: " $HALB.VrrpAdvertInterval.ToString()
+					Line 3 "Enable OS updates`t`t`t: " $HALB.OSUpdate.ToString()
+					Line 3 "Keep existing load balancing settings`t: " $HALB.KeepLBProxyConfig.ToString()
+					Line 3 "Keep existing VRRP/keepalive settings`t: " $HALB.KeepVRRPConfig.ToString()
+					Line 0 ""
+				}
+				If($HTML)
+				{
+					$rowdata = @()
+					$columnHeaders = @("Enable RDP UPD tunneling",($Script:htmlsb),$HALB.EnableUDPTunneling.ToString(),$htmlwhite)
+					$rowdata += @(,("Maximum TCP connections",($Script:htmlsb),$HALB.MaxTCPConnections.ToString(),$htmlwhite))
+					$rowdata += @(,("Client inactivity timeout (s)",($Script:htmlsb),$HALB.ClientIdleTimeout.ToString(),$htmlwhite))
+					$rowdata += @(,("Gateway connection timeout (s)",($Script:htmlsb),$HALB.GWConnectionTimeout.ToString(),$htmlwhite))
+					$rowdata += @(,("Client connection queue timeout (s)",($Script:htmlsb),$HALB.ClientQueueTimeout.ToString(),$htmlwhite))
+					$rowdata += @(,("Gateway inactivity timeout (s)",($Script:htmlsb),$HALB.GatewayIdleTimeout.ToString(),$htmlwhite))
+					$rowdata += @(,("Amount of TCP connections per second",($Script:htmlsb),$HALB.SessionsRate.ToString(),$htmlwhite))
+					$rowdata += @(,("Gateways health check intervals (s)",($Script:htmlsb),$HALB.GWHealthCheckInterval.ToString(),$htmlwhite))
+					$rowdata += @(,("VRRP virtual router ID",($Script:htmlsb),$HALB.VirtualRouterID.ToString(),$htmlwhite))
+					$rowdata += @(,("VRRP authentication password",($Script:htmlsb),"",$htmlwhite))
+					$rowdata += @(,("VRRP broadcast interval (m)",($Script:htmlsb),$HALB.VrrpBroadcastInterval.ToString(),$htmlwhite))
+					$rowdata += @(,("VRRP health check script interval (s)",($Script:htmlsb),$HALB.VrrpHealthCheckInterval.ToString(),$htmlwhite))
+					$rowdata += @(,("VRRP health check script timeout",($Script:htmlsb),$HALB.VrrpHealthCheckTimeout.ToString(),$htmlwhite))
+					$rowdata += @(,("VRRP advertisement interval (s)",($Script:htmlsb),$HALB.VrrpAdvertInterval.ToString(),$htmlwhite))
+					$rowdata += @(,("Enable OS updates",($Script:htmlsb),$HALB.OSUpdate.ToString(),$htmlwhite))
+					$rowdata += @(,("Keep existing load balancing settings",($Script:htmlsb),$HALB.KeepLBProxyConfig.ToString(),$htmlwhite))
+					$rowdata += @(,("Keep existing VRRP/keepalive settings",($Script:htmlsb),$HALB.KeepVRRPConfig.ToString(),$htmlwhite))
+
+					$msg = "Advanced"
+					$columnWidths = @("200","400")
+					FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
+					WriteHTMLLine 0 0 ""
+				}
+			}
+		}
+	}
 	
-	#Themes - not in PoSH
-	
+	#Themes
 	$Themes = Get-RASTheme -Siteid $Site.Id -EA 0 4> $Null
 	
 	If(!$?)
@@ -15661,7 +16689,7 @@ Function OutputSite
 			$ThemeHTML5URL                = "https://FQDN/$($Theme.HTML5Client.Url.LoginPageURLPath)"
 			$ThemeShowDownloadURL         = $Theme.HTML5Client.Url.ShowDownloadURL.ToString()
 			$ThemeOverrideDownloadURL     = $Theme.HTML5Client.Url.OverrideWindowsClientDownloadURL
-			$ThemeFooterURLs              = Get-RASThemeFooterURL -Name $Theme.Name -EA 0 4> $Null
+			$ThemeFooterURLs              = @(Get-RASThemeFooterURL -Name $Theme.Name -EA 0) 4> $Null #fixed in 2.52 thanks to Thomas Krampe
 			
 			If(!$? -or $Null -eq $ThemeFooterURLs)
 			{
@@ -16036,7 +17064,7 @@ Function OutputSite
 				$Table = $Null
 				WriteWordLine 0 0 ""
 				
-				If($ThemeFooterURLs.Count -gt 0) #don't process if array is empty
+				If($ThemeFooterURLs -is [array] -and $ThemeFooterURLs.Count -gt 0) #don't process if array is empty
 				{
 					WriteWordLine 4 0 "Footer URLs:"
 					[System.Collections.Hashtable[]] $URLWordTable = @();
@@ -16085,7 +17113,7 @@ Function OutputSite
 				Line 3 "Parallels Client (Windows)`t  : " $ThemeOverrideDownloadURL
 				Line 0 ""
 
-				If($ThemeFooterURLs.Count -gt 0) #don't process if array is empty
+				If($ThemeFooterURLs -is [array] -and $ThemeFooterURLs.Count -gt 0) #don't process if array is empty
 				{
 					Line 3 "Footer URLs:"
 					Line 3 "URL                             Text                            Tooltip                       "
@@ -16118,7 +17146,7 @@ Function OutputSite
 				FormatHTMLTable $msg "auto" -rowArray $rowdata -columnArray $columnHeaders -fixedWidth $columnWidths
 				WriteHTMLLine 0 0 ""
 
-				If($ThemeFooterURLs.Count -gt 0) #don't process if array is empty
+				If($ThemeFooterURLs -is [array] -and $ThemeFooterURLs.Count -gt 0) #don't process if array is empty
 				{
 					$rowdata = @()
 
@@ -18248,6 +19276,24 @@ Function OutputPublishingSettings
 			}
 		}
 
+		If($PubItem.PreferredRoutingEnabled)
+		{
+			$Results = Get-RASPubItemPreferredRoute -Id $PubItem.Id -EA 0 4> $Null
+			
+			If(!$? -or $Null -eq $Results)
+			{
+				$PreferredRouting = ""
+			}
+			Else
+			{
+				$PreferredRouting = ""
+			}
+		}
+		Else
+		{
+			$PreRouting = ""
+		}
+		
 		If($MSWord -or $PDF)
 		{
 			WriteWordLine 2 0 $PubItem.Name
@@ -32685,18 +33731,18 @@ Function OutputPoliciesDetails
 			{
 				$SettingsWordTable += @{
 				Text = $txt;
-				Value = $Policy.ClientPolicy.Session.PrimaryConnection.AutoStart.ToString();
+				Value = $Policy.ClientPolicy.Session.PrimaryConnection.AutoLogin.ToString();
 				}
 			}
 			If($HTML)
 			{
 				$rowdata += @(,(
 				$txt,$htmlbold,
-				$Policy.ClientPolicy.Session.PrimaryConnection.AutoStart.ToString(),$htmlwhite))
+				$Policy.ClientPolicy.Session.PrimaryConnection.AutoLogin.ToString(),$htmlwhite))
 			}
 			If($Text)
 			{
-				OutputPolicySetting $txt $Policy.ClientPolicy.Session.PrimaryConnection.AutoStart.ToString()
+				OutputPolicySetting $txt $Policy.ClientPolicy.Session.PrimaryConnection.AutoLogin.ToString()
 			}
 			
 			$AuthType = ""
@@ -34864,9 +35910,11 @@ Function OutputPoliciesDetails
 			$LogLevel = ""
 			Switch($Policy.ClientPolicy.ClientOptions.Logging.LogLevel)
 			{
-				"Verbose"	{$LogLevel = "Standard"; Break}
+				"Verbose"	{$LogLevel = "Verbose"; Break}
 				"4"			{$LogLevel = "Extended"; Break}
 				"5"			{$LogLevel = "Verbose"; Break}
+				"Standard"	{$LogLevel = "Standard"; Break}
+				"Extended"	{$LogLevel = "Extended"; Break}
 				Default		{$LogLevel = "Logging/Log level not found: $($Policy.ClientPolicy.ClientOptions.Logging.LogLevel)"; Break}
 			}
 			
