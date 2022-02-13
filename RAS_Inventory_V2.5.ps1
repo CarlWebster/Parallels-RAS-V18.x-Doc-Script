@@ -420,9 +420,9 @@
 	text document.
 .NOTES
 	NAME: RAS_Inventory_V2.5.ps1
-	VERSION: 2.52
+	VERSION: 2.53
 	AUTHOR: Carl Webster
-	LASTEDIT: February 7, 2022
+	LASTEDIT: February 13, 2022
 #>
 
 
@@ -532,6 +532,34 @@ Param(
 
 #Version 1.0 released to the community on 5-August-2020
 #Work on 2.0 started on 20-Sep-2020
+#
+#Version 2.53 13-Feb-2022
+#	When processing RD Session Hosts, the script had bad logic that assumed there was always only one RDS Group.
+#		This caused some Agent settings to show as System.Object[] instead of their Numeric or Boolean value
+#		For example:
+#			Agent settings
+#				Port                                                  : System.Object[]
+#				Max Sessions                                          : System.Object[]
+#				Support Windows Shell URL namespace objects           : System.Object[]
+#				Allow 2xRemoteExec to send command to the client      : System.Object[]
+#				Use RemoteApp if available                            : System.Object[]
+#				Enable applications monitoring                        : System.Object[]
+#				Allow file transfer command (HTML5 and Chrome clients): System.Object[]
+#				Do not allow to change location                       : System.Object[]
+#				Enable drive redirection cache                        : System.Object[]
+#		Oops, my bad. The fix only took one line of code and changing two variables.
+#		Now the results are correct.
+#			Agent settings
+#				Port                                                  : 3389
+#				Max Sessions                                          : 25
+#				Support Windows Shell URL namespace objects           : True
+#				Allow 2xRemoteExec to send command to the client      : True
+#				Use RemoteApp if available                            : False
+#				Enable applications monitoring                        : True
+#				Allow file transfer command (HTML5 and Chrome clients): True
+#				Do not allow to change location                       : False
+#				Enable drive redirection cache                        : True
+#		Thanks to Thomas Krampe for all his help and remote sessions to track this down
 #
 #Version 2.52 7-Feb-2022
 #	Added Function GetRASStatus to return the full status text for several RAS Status cmdlets
@@ -874,9 +902,9 @@ Set-StrictMode -Version Latest
 #force  on
 $PSDefaultParameterValues = @{"*:Verbose"=$True}
 $Script:emailCredentials  = $Null
-$script:MyVersion         = '2.52'
+$script:MyVersion         = '2.53'
 $Script:ScriptName        = "RAS_Inventory_V2.5.ps1"
-$tmpdate                  = [datetime] "02/07/2022"
+$tmpdate                  = [datetime] "02/13/2022"
 $Script:ReleaseDate       = $tmpdate.ToUniversalTime().ToShortDateString()
 
 If($MSWord -eq $False -and $PDF -eq $False -and $Text -eq $False -and $HTML -eq $False)
@@ -5637,11 +5665,12 @@ Function OutputSite
 				{
 					If($Results.RDSIds -Contains $RDSHost.Id )
 					{
+						$Result = $Results | Where-Object {$_.RDSIDs -eq $RDSHost.Id} #fix for 2.53
 						#does this group inherit default settings?
-						If($Results.InheritDefaultAgentSettings -eq $False)
+						If($Result.InheritDefaultAgentSettings -eq $False) #fix for 2.53
 						{
 							#no we don't, so get the default settings for the group
-							$GroupDefaults  = $Results.RDSDefSettings
+							$GroupDefaults  = $Result.RDSDefSettings #fix for 2.53
 
 							$RDSPort        = $GroupDefaults.Port.ToString()
 							$RDSMaxSessions = $GroupDefaults.MaxSessions.ToString()

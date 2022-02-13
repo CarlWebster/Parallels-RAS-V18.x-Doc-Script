@@ -13,6 +13,34 @@
 #Version 1.0 released to the community on 5-August-2020
 #
 
+#Version 2.53 13-Feb-2022
+#	When processing RD Session Hosts, the script had bad logic that assumed there was always only one RDS Group.
+#		This caused some Agent settings to show as System.Object[] instead of their Numeric or Boolean value
+#		For example:
+#			Agent settings
+#				Port                                                  : System.Object[]
+#				Max Sessions                                          : System.Object[]
+#				Support Windows Shell URL namespace objects           : System.Object[]
+#				Allow 2xRemoteExec to send command to the client      : System.Object[]
+#				Use RemoteApp if available                            : System.Object[]
+#				Enable applications monitoring                        : System.Object[]
+#				Allow file transfer command (HTML5 and Chrome clients): System.Object[]
+#				Do not allow to change location                       : System.Object[]
+#				Enable drive redirection cache                        : System.Object[]
+#		Oops, my bad. The fix only took one line of code and changing two variables.
+#		Now the results are correct.
+#			Agent settings
+#				Port                                                  : 3389
+#				Max Sessions                                          : 25
+#				Support Windows Shell URL namespace objects           : True
+#				Allow 2xRemoteExec to send command to the client      : True
+#				Use RemoteApp if available                            : False
+#				Enable applications monitoring                        : True
+#				Allow file transfer command (HTML5 and Chrome clients): True
+#				Do not allow to change location                       : False
+#				Enable drive redirection cache                        : True
+#		Thanks to Thomas Krampe for all his help and remote sessions to track this down
+
 #Version 2.52 7-Feb-2022
 #	Added Function GetRASStatus to return the full status text for several RAS Status cmdlets
 #		Updated all AgentState outputs to use the value from GetRASStatus
