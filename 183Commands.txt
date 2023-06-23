@@ -1,0 +1,101 @@
+Get-RAS2FAExcludeGWIPList
+Get-RAS2FAExcludeIPList
+Get-RAS2FAExcludeMACList
+Get-RAS2FAExcludeUserGroupList
+Get-RAS2FARadiusAttribute
+Get-RAS2FARadiusAutomation
+Get-RAS2FASetting
+Get-RASAdminAccount
+Get-RASAdminSession
+Get-RASAgent
+Get-RASAgentDiagnostic - new
+Get-RASAllowedDevicesSetting
+Get-RASAuthSettings
+Get-RASCertificate
+Get-RASClientPolicy
+Get-RASClientPolicyConnection
+Get-RASClientPolicyUserGroup - new
+Get-RASCPUOptimizationSettings
+Get-RASCurrentAdminPermissions
+Get-RASCustomPermission
+Get-RASCustomRoute - new
+Get-RASFarmSettings
+Get-RASFSLogix
+Get-RASFSLogixCCDLocation
+Get-RASFSLogixFolder
+Get-RASFSLogixSettings
+Get-RASFSLogixUser
+Get-RASFSLogixVHDLocation
+Get-RASGW
+Get-RASGWDefaultSettings
+Get-RASGWStatus
+Get-RASHALB
+Get-RASHALBDevice
+Get-RASHALBStatus
+Get-RASInvitationEmailSettings
+Get-RASLBSettings
+Get-RASLicenseDetails
+Get-RASMailboxSettings
+Get-RASNotification
+Get-RASNotificationDefaults
+Get-RASNotificationEvent
+Get-RASNotificationResource
+Get-RASNotificationScript
+Get-RASPA
+Get-RASPAStatus
+Get-RASPerformanceMonitorSettings
+Get-RASPowerPermission
+Get-RASPrintingAutoInstallFont
+Get-RASPrintingSettings
+Get-RASProvider
+Get-RASProviderRemotePCStatic - new
+Get-RASProviderStatus
+Get-RASPubAppFileExt
+Get-RASPubDefaultSettings
+Get-RASPubFolder
+Get-RASPubItem
+Get-RASPubItemClientFilter
+Get-RASPubItemGWFilter
+Get-RASPubItemIcon
+Get-RASPubItemIPFilter
+Get-RASPubItemMACFilter
+Get-RASPubItemPreferredRoute - new
+Get-RASPubItemStatus - new
+Get-RASPubItemUserFilter
+Get-RASPubRDSApp
+Get-RASPubRDSAppServerAttr
+Get-RASPubRDSDesktop
+Get-RASPubVDIApp
+Get-RASPubVDIDesktop
+Get-RASRDS
+Get-RASRDSDefaultSettings
+Get-RASRDSession
+Get-RASRDSGroup
+Get-RASRDSGroupMember
+Get-RASRDSSchedule
+Get-RASRDSScheduleDisable
+Get-RASRDSScheduleMessage
+Get-RASRDSScheduleReboot
+Get-RASRDSStatus
+Get-RASReportingSettings
+Get-RASScanningSettings
+Get-RASSessionSetting
+Get-RASSite
+Get-RASSiteStatus
+Get-RASSystemSettings
+Get-RASTheme - new
+Get-RASThemeFooterURL - new
+Get-RASThemeGroupFilter - new
+Get-RASThemeImage - new
+Get-RASVDIGuest
+Get-RASVDIGuestDefaultSettings
+Get-RASVDIPersistentGuest
+Get-RASVDIPool
+Get-RASVDIPoolMember
+Get-RASVDISettings
+Get-RASVDITemplate
+Get-RASVDITemplateLicenseKey
+Get-RASVDITemplateSettings
+Get-RASVDITemplateStatus - new
+Get-RASVersion
+Get-RASVM
